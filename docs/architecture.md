@@ -35,7 +35,7 @@ Unreal's Lumen configuration is included. Runtime procedural meshes are not adve
 
 ## Gameplay boundary
 
-The public prototype provides free driving, delivery destinations, a real street minimap, physics traffic, camera modes, rain/fog/night presets, damage and recovery. Traffic now follows connected directed road routes and brakes for physical cars and pedestrians. Shared furniture descriptors drive both rendered props and colliders; dynamic pedestrians apply walking forces. Full signal phases, turn-restriction compliance, merge negotiation, pedestrian crossings and cyclists remain unfinished.
+The public prototype provides free driving, delivery destinations, a real street minimap, physics traffic, camera modes, rain/fog/night presets, damage, conditional recovery, pedestrian consequences, car theft and police pursuit. Traffic now follows connected directed road routes and brakes for physical cars and pedestrians. Shared furniture descriptors drive both rendered props and colliders; dynamic pedestrians apply walking forces. Full signal phases, turn-restriction compliance, merge negotiation, pedestrian crossings and cyclists remain unfinished.
 
 All browser simulation is local; it has no multiplayer, accounts, paid service, or server state. GitHub Pages serves the static game. Unreal packaged binaries require a licensed engine build runner; GitHub-hosted generic runners do not include Unreal.
 
@@ -44,10 +44,19 @@ To select a different browser package without changing simulation/rendering code
 ## Browser modules
 
 - `physics.js`: vehicle forces, continuous ground, concave collision meshes, surface contact and impact damage.
-- `traffic.js`: directed route traversal, following, intersection yielding and physical stuck recovery.
-- `ambient.js`: validated sidewalk/furniture layout, instanced scenery and force-driven walking adults.
+- `traffic.js`: directed route traversal, following, intersection yielding, parked-car placement and police route planning.
+- `pursuit.js`: incident response, geometry-blocked sight, continuous escape timer and sustained arrest conditions.
+- `gameplay.js`: pedestrian incident forwarding, held theft interaction and session restart.
+- `ambient.js`: validated sidewalks, instanced residents, physical walking/activity control and persistent impact outcomes.
+- `places.js`: geographically distributed businesses, outdoor seating, homes, rest pockets and shared fixture/activity descriptors.
 - `car-visual.js`: licensed GLB loading, wheel/chassis alignment, materials and damage deformation.
 - `render.js`: city meshes, sky lighting, cameras and weather.
 - `audio.js` / `effects.js`: simulation-driven sound, tyre marks, impact particles and camera impulse.
 
-The new detail model is shared in memory. Traffic omits selected interior groups, uses simpler glass and is culled beyond 285 m. Static minimap content is cached. These measures bound rendering work; measured Node physics timing is not a browser FPS guarantee.
+The new detail model is shared in memory. Traffic omits selected interior groups, uses simpler glass and is culled beyond 300 m. A shared 22,230-triangle distant car LOD retains the source silhouette, while near/player cars use full detail. Residents use four instanced geometry batches with distance-based animation rates. Static minimap content is cached. These measures bound rendering work; measured Node physics timing is not a browser FPS guarantee.
+
+## Identity and pursuit clock
+
+`sim.allVehicles` contains stable records. Theft changes the controlled record and parks the previous vehicle without moving or repairing either body. Renderer ownership changes rebuild only the interior/driver/light presentation; physical damage and tuning stay with the car. New occupant bodies join the same pedestrian hazard registry.
+
+Pursuit uses the fixed simulation clock, including its full 60-second unseen interval. Pausing freezes it. Line-of-sight rays ignore vehicles/people as optical occluders but respect buildings, terrain and solid scenery. Police targets follow graph paths, followed by an unobstructed short final approach. Capture needs sustained close/slow contact conditions. Gameplay consumes pedestrian outcome events once and forwards only player-caused serious outcomes. A restart clears wanted, resets the healthy population, repairs the controlled car and selects a clear spawn.

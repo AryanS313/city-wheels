@@ -182,7 +182,8 @@ test("traffic is a rigid-body vehicle that moves under wheel engine force", () =
   const traffic = sim.traffic.at(-1),
     before = traffic.body.position.clone();
   tick(sim, 6);
-  assert.equal(traffic.body.mass, 1450);
+  assert.equal(traffic.body.mass, traffic.profile.mass);
+  assert.ok(traffic.body.mass >= 1200 && traffic.body.mass <= 1900);
   assert.ok(traffic.body.position.distanceTo(before) > 3);
   sim.dispose();
 });

@@ -1,54 +1,73 @@
-# City Wheels browser simulation v0.2
+# City Wheels simulation v0.3 integration
 
-Copy `physics.js` and `traffic.js` together into the browser source directory. Dependencies are `cannon-es@0.20.0` and `earcut@3.0.2`.
-
-## Ground and rendering
-
-- The physical ground is one continuous heightfield. There are no overlapping road boxes or vertical road-segment end caps.
-- Real road elevations are rasterized onto the DEM with a smooth shoulder blend. The real SF collider has513×513 height samples at1.953125m spacing; steep grades remain elevation-driven.
-- `sim.terrainRenderData` exposes `{width,height,cellSize,bounds:{minX,minY},heights}` at the exact collider resolution. Rows run south to north.
-- Use ground vertices `[east,height,-north]` and triangles `[SW,SE,NW]`, `[SE,NE,NW]`, matching Cannon's triangle diagonal.
-- Road ribbon vertices must use `sim.sampleElevation(east,north)+0.025` for their visual elevation. Do not retain the old independent road-box top elevations.
-- `sim.terrainRenderHeights` and `sim.terrainHeights` remain the native257×257 height array for compatibility. Use `terrainRenderData` for exact ground rendering.
-- Building collision uses triangle prisms from the actual footprint, including `footprintHoles`. Concave alleys and courtyards remain open; there is no convex-hull cap.
-
-## Props and pedestrian integration
+Runtime modules: `physics.js`, `traffic.js`, `pursuit.js`. Keep all three together. Dependencies remain `cannon-es@0.20.0` and `earcut@3.0.2`.
 
 ```js
-const sim = new CitySimulation(city, { trafficCount: 18 });
-const layout = createStreetLayout(city, sim.sampleElevation.bind(sim));
-sim.addObstacles(layout);
-// Positions below are renderer/world positions, not city north-up coordinates.
-sim.addObstacles([{id:'streetlight-1',type:'pole',position:[east,groundElevation,south],radius:.13,height:6}]);
-sim.pedestrianBodies = ambient.people.map(p => p.body);
+import {CitySimulation} from './physics.js';
+import {PursuitSystem} from './pursuit.js';
+const sim = new CitySimulation(city, {trafficCount:40,policeCount:4,parkedCount:16});
+const pursuit = new PursuitSystem(sim,city);
+// Physics owns the pursuit clock. Do not also call pursuit.update from rendering.
+sim.step(deltaSeconds);
 ```
 
-Obstacle types `pole`, `tree` and `bollard` have narrow vertical cylinder colliders with the supplied radius and height. A `barrier` uses supplied width/depth/height and headingRadians. Position is the ground/base position. Only actual supplied visible props are created. IDs are preserved on collision events. These props currently stay anchored rather than breaking off.
+## Fleet and ownership
 
-Traffic reads `sim.pedestrianBodies`, constructor `options.pedestrians`, or falls back to `world.bodies` with `body.isPedestrian=true`.
+- `sim.vehicle` remains the currently controlled player record.
+- `sim.traffic` contains every other moving, parked or abandoned physical car. `trafficCount:40` includes the four patrol units; `parkedCount:16` adds parked targets. The real package creates57 total cars including the player.
+- `sim.allVehicles` is a stable array containing stable record identities. Keep render objects keyed by `record.id` or `record.body.id`; theft does not create, delete or move bodies.
+- Every record has `id` (stable string), `body.id` (numeric), `role:'civilian'|'police'`, `profile:{name,color,powerMultiplier,mass,gripMultiplier,style}`, `tuning:{power,grip,brakes}`, `parked`, `abandoned`, existing body/raycast/wheels/health/damage fields, and controls.
+- Civilian profiles have different mass, torque multiplier and tyre grip. Names/colors are fictional gameplay tuning, not claims about the licensed visual car's actual engineering specs. Shape/model is shared; visual variation comes from paint/profile identity.
+- Profiles, damage and tuning stay attached to the physical car through theft.
+- `body.vehicleId` is the stable string. Collision events retain numeric `vehicleId:body.id` and add `vehicleKey:record.id`. Collision `player` is evaluated against the current owner at impact time.
 
-## Vehicle and impacts
+`sim.canTakeVehicle(target)` and `sim.takeVehicle(target)` accept a record, numeric body ID or stable record ID. Both require distance≤7m and both absolute speeds plus relative speed≤12km/h. Taking a vehicle returns `{ok:true,vehicle,previous}` or `{ok:false,reason,...}`. The old car becomes abandoned/parked and brakes physically; the target becomes the player car at its existing position and velocity. Ownership changes do not repair damage, alter tuning, teleport, or automatically report a police incident.
 
-The existing player body/raycast/wheel APIs, controls, reset and weather interfaces remain compatible. The chassis center of mass and wheel locations are unchanged. Collision boxes now fit the low detailed model: main body bounds X±.865m, Y[-.30,.12]m, Z[-2.246,1.894]m; cabin roof tops at+.43m, removing the old invisible+.88m roof. Body center settles about0.5m above road; the renderer should preserve the same chassis origin and wheel transforms.
+The gameplay module owns the1.25-second hold-E interaction and the displaced driver's ambient animation. After successful takeover, call `life.spawnOccupant(target)` and report the theft. There is no on-foot player-avatar mode in this implementation.
 
-`record.damage = {front,rear,left,right}` stores cumulative local damage. `record.health` retains its0–1 range. Small scrapes do not reduce engine power; significant front damage progressively reduces it. Low-speed bumper impacts preserve driveability. Rolling resistance is a speed-opposing force; service brakes have no implicit always-on force.
+## Pedestrian and theft incidents
 
-Collision events include `{type:'collision',player,vehicleId,otherId,obstacleId,impact,energy,damage,zone,hitPosition:[x,y,z],normal:[x,y,z],time}`. `player` distinguishes player and ambient traffic effects. Momentum transfer comes from the dynamic collision solver, not scripted velocity cancellation. Events are retained in the existing short recent-event array.
+Forward each newly emitted player incident once:
 
-## Traffic
+```js
+pursuit.reportIncident({
+  type:'pedestrian-impact',outcome:'injured',severity:1,
+  position:[worldX,elevation,worldZ],player:true,vehicleId:sim.vehicle.body.id
+});
+// Also accepts type:'injury'|'fatality'|'theft' and severity1|2|3.
+```
 
-18 cars are spawned on nearby eligible lanes by default. All use the same1450kg rigid-body/raycast vehicle model as the player. Directed OSM graph edges connect across way ends; lane-offset waypoints and speed-dependent steering lookahead drive the bodies with engine/brake forces. Routing prefers turns back into the tile before its edges. Following distance and pedestrian checks brake for hazards, and deterministic junction priority avoids mutual yielding. No per-frame position assignments or visible teleports move traffic. Physically trapped cars may attempt a short reverse maneuver.
+`outcome:'fatal'`/fatality implies severity2; injury/theft implies1 when severity is omitted. `outcome:'stagger'`, severity0 and `player:false` are ignored. Theft reporting belongs to root gameplay to avoid duplicates. A stolen police car can use severity3. `sim.pedestrianBodies` remains the preferred traffic-hazard list; body.isPedestrian is the fallback.
 
-This remains prototype traffic: complex intersections, turn restrictions and signal phases are not a complete traffic-law simulation. Some cars can queue, reach genuine dead ends, or get trapped during tight maneuvers.
+## Pursuit
 
-## Tests
+Public fields/getters:
 
-`npm test` runs19 tests, including real SF60-second driving with18 dynamic cars, road grade and surface grip, concave openings/courtyards, actual pole/trunk collisions, pedestrian braking, momentum transfer, damage zones and coasting. To run after copying, set `CITY_WHEELS_CITY=/absolute/path/city.json` and keep `benchmark-city.js` plus `long-smoke.js` beside `physics.test.js`.
+- `state`: `idle`, `pursuit`, `search`, `busted`.
+- `severity`:0–3; `wanted`:boolean.
+- `unseenSeconds`, `escapeRemaining`: the continuous escape countdown.
+- `captureProgress`:0–1; `captureSeconds`: accumulated close/slow time.
+- `officers`: currently nonplayer/nonabandoned police records.
+- `events`: recent events with monotonic `sequence`, `type`, `time`, `state`, `severity`. Types include `wanted`, `searching`, `spotted`, `cleared`, `busted`, `reset`.
 
-`node web/test/long-smoke.js /absolute/path/city.json` prints detailed real-data performance. Latest development run: about600ms initialization,451m across12OSM ways in60seconds, full player health, longest unexplained throttle stall0.067seconds; average physics2.12ms/p953.33ms with18 cars. Browser/rendering cost and other hardware are separate.
+Police chase with engine, steering and brake forces. Directed graph A* routes lead toward the last known position; a short unobstructed final approach follows the actual suspect. Cops can maneuver around stopped queues. Buildings, terrain and actual props block line of sight. No police vehicle position or velocity is assigned by pursuit control.
 
-## Ambient and visual integration
+Defaults: sight125m, sight checks every.20s, continuously unseen60s clears wanted, dispatch grace2.5s, capture requires3s continuously within6.5m of a seeing officer while player speed≤6km/h and officer speed≤14km/h. Any sighting resets the full60-second timer; moving away or accelerating resets capture progress. BUSTED disables player throttle and brakes the vehicle. Police lights are exposed as `record.policeLights`.
 
-See `web/src/main.js` for the complete startup sequence. Await the detailed car GLB, then create the same furniture descriptors for renderer and physics, and register the pedestrian bodies. `life.update(dt)` runs after `sim.step(dt)` to synchronize articulated meshes. The ambient controller queues forces on the world's fixed-step callback; it must not be stepped twice.
+Optional constructor config keys: `evadeSeconds`, `captureSeconds`, `captureDistance`, `captureMaxSpeedKph`, `copCaptureMaxSpeedKph`, `sightDistance`, `sightInterval`, `dispatchGraceSeconds`. Tests shorten selected rules; normal play should keep60s evade/3s capture.
 
-The real-city regression now runs the full 60 simulated seconds with 18 traffic cars, 42 pedestrians and the generated solid furniture. Collision tests additionally exercise narrow poles/trunks, concave alleys, courtyard holes, car momentum, low-impact engine health, and pedestrian toppling/recovery. Detailed car validation checks real model geometry and panel deformation in Node with textures disabled; it does not validate browser shaders.
+`pursuit.reset()` clears wanted and returns police to patrol routing. `sim.reset()` calls it and repairs/repositions the currently owned player car, finding a clear road spot if the original abandoned car occupies the spawn. `sim.reset()` returns false during pursuit/search, preventing wanted-level escape through recovery; BUSTED restart and idle recovery remain available. `sim.reset({force:true})` is an explicit internal override for a full session reset.
+
+## Ground and props
+
+The v0.2 continuous heightfield, exact concave/courtyard colliders, narrow visible-prop obstacle API and low car roof collider remain. Use `terrainRenderData` and `sampleElevation(east,north)` exactly as before. Add visible poles/trees through `sim.addObstacles(layout)` after generating the layout from the physical ground.
+
+Parked cars are placed only on roads at least9.75m wide, inside the road edge, spaced10m from other vehicles and away from known intersections. Moving traffic combines near-player density with farthest-point coverage across the tile.
+
+## Validation
+
+Run `npm test --prefix web`. The checked-in test suite resolves the bundled SF package automatically; `CITY_WHEELS_CITY=/absolute/path/city.json` can select another compatible fixture.
+
+Tests cover real-road driving, surfaces, collision geometry, pedestrian braking, ownership swaps and constraints, injury/fatality dispatch, wall-blocked sight, continuous60s escape/reset, sustained capture/restart, and physical police movement. Real SF has40 moving cars/four patrol units plus16 physical parked targets, spreading more than750m in both map axes. An actual stationary-suspect run was physically caught at12.13s with57 bodies; active pursuit measured about5.5ms mean/8.0ms p95 physics per step, with occasional17ms spikes. Rendering, ambient pedestrians and other hardware add separate cost.
+
+This is arcade gameplay with prototype traffic/pursuit control, not a full GTA simulation, comprehensive traffic-law engine or real-world injury model. Traffic can queue or get trapped in difficult maneuvers; police use road paths and real body movement instead of guaranteed instant arrival.

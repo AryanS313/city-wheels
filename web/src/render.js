@@ -4,6 +4,7 @@ import {
   createCarVisual,
   updateCarVisual,
 } from "./car-visual.js";
+import { addVehicleDetails, updateVehicleDetails } from "./vehicle-details.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
@@ -599,8 +600,8 @@ export class CityRenderer {
       url: `${import.meta.env.BASE_URL}assets/car/model.glb`,
     });
   }
-  createCar(color, player) {
-    const visual = createCarVisual(color, player);
+  createCar(color, player, detail = "full") {
+    const visual = createCarVisual(color, player, { detail });
     this.scene.add(visual.root, ...visual.wheels);
     return visual;
   }
@@ -696,27 +697,63 @@ export class CityRenderer {
     const car = sim.vehicle,
       body = car.body;
     for (const record of [car, ...sim.traffic]) {
+      const player = record === car;
+      const distance = record.body.position.distanceTo(car.body.position);
       let visual = this.carVisuals.get(record);
-      if (!visual) {
+      const detail = player
+        ? "full"
+        : visual?.detail === "full"
+          ? distance > 90
+            ? "medium"
+            : "full"
+          : distance < 65
+            ? "full"
+            : "medium";
+      // Allocate the detailed body only when it can be seen. Ownership changes
+      // rebuild interior/headlights while preserving the physical car and damage.
+      if (visual && (visual.player !== player || visual.detail !== detail)) {
+        visual.detailsDispose?.();
+        visual.dispose();
+        this.carVisuals.delete(record);
+        visual = null;
+      }
+      if (!visual && (player || distance < 300)) {
         visual = this.createCar(
-          record === car
-            ? "#bc8050"
-            : ["#b4c4ce", "#704e46", "#a4ad9c"][this.carVisuals.size % 3],
-          record === car,
+          record.profile?.color ||
+            record.color ||
+            (record.role === "police"
+              ? "#e7e9eb"
+              : [
+                  "#bb7950",
+                  "#526777",
+                  "#497572",
+                  "#a6352e",
+                  "#d0b98c",
+                  "#272b34",
+                ][record.body.id % 6]),
+          player,
+          detail,
         );
+        addVehicleDetails(visual, record);
         this.carVisuals.set(record, visual);
       }
+      if (!visual) continue;
+      const visible = player || distance < 300;
+      visual.root.visible = visible;
+      visual.wheels.forEach((wheel) => (wheel.visible = visible));
+      if (!visible) continue;
       updateCarVisual(visual, record, {
         dt,
         weather: this.weather,
-        cockpit: record === car && this.mode === 1 && !this.photo,
-        controls: record === car ? sim.controls : record.controls,
+        cockpit: player && this.mode === 1 && !this.photo,
+        controls: player ? sim.controls : record.controls,
       });
-      const visible =
-        record === car ||
-        record.body.position.distanceTo(car.body.position) < 285;
-      visual.root.visible = visible;
-      visual.wheels.forEach((wheel) => (wheel.visible = visible));
+      updateVehicleDetails(visual, record, {
+        player,
+        time: this.clock,
+        wanted: sim.pursuit?.state !== "idle" && !!sim.pursuit,
+        distance,
+      });
     }
     const bp = new THREE.Vector3().copy(body.position),
       q = new THREE.Quaternion().copy(body.quaternion);

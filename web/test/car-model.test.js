@@ -78,3 +78,29 @@ if (
   !visual.windshieldMesh
 )
   process.exit(1);
+
+const distant = createCarVisual("#526777", false, { detail: "medium" });
+let triangles = 0;
+for (const group of [distant.root, ...distant.wheels])
+  group.traverse((o) => {
+    if (o.isMesh)
+      triangles +=
+        (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3;
+  });
+if (
+  !Number.isFinite(triangles) ||
+  triangles < 3000 ||
+  triangles > t.triangleCount * 0.45
+)
+  throw new Error(`Traffic LOD triangle budget failed: ${triangles}`);
+const distantBox = new THREE.Box3().setFromObject(distant.root),
+  dimensions = distantBox.getSize(new THREE.Vector3());
+if (Math.abs(dimensions.z - box.getSize(new THREE.Vector3()).z) > 0.15)
+  throw new Error("Traffic LOD changed the car silhouette");
+console.log(
+  "Traffic LOD:",
+  triangles,
+  "triangles, original silhouette preserved.",
+);
+distant.dispose();
+visual.dispose();

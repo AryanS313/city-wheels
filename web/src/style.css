@@ -734,3 +734,204 @@ dialog a {
     padding: 10px;
   }
 }
+
+/* Wanted and vehicle interactions stay close to the driving view. */
+[hidden] {
+  display: none !important;
+}
+.wanted {
+  position: absolute;
+  right: 34px;
+  top: 127px;
+  width: 280px;
+  padding: 18px 20px;
+  background: #152131ed;
+  border-left: 3px solid #ef455a;
+  border-radius: 3px;
+  z-index: 4;
+  box-shadow: 0 8px 36px #0004;
+}
+.wanted-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: #ff7784;
+}
+#wanted-stars {
+  font-size: 21px;
+  letter-spacing: 3px;
+}
+.wanted strong {
+  font-size: 17px;
+  line-height: 1.35;
+  display: block;
+}
+.wanted p {
+  font-size: 14px;
+  line-height: 1.4;
+  color: #c7d3df;
+  margin: 8px 0 12px;
+}
+.pursuit-track,
+.theft-track {
+  height: 3px;
+  background: #c6d8e221;
+  overflow: hidden;
+}
+.pursuit-track i,
+.theft-track i {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #ef455a;
+  transition: width 0.1s linear;
+}
+.wanted.search {
+  border-color: #6dcbf3;
+}
+.wanted.search .wanted-top {
+  color: #8adafb;
+}
+.wanted.search .pursuit-track i {
+  background: #6dcbf3;
+}
+body.wanted .mission {
+  display: none;
+}
+.theft {
+  position: absolute;
+  left: 50%;
+  bottom: 175px;
+  transform: translateX(-50%);
+  min-width: 235px;
+  z-index: 6;
+  background: #162531ed;
+  border: 1px solid #edc28080;
+  box-shadow: 0 8px 32px #0006;
+}
+#steal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  font-size: 14px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  touch-action: none;
+  user-select: none;
+}
+#steal kbd {
+  background: #f4bf75;
+  color: #142432;
+  border: 0;
+  padding: 4px 9px;
+  font-size: 15px;
+}
+.theft-track i {
+  background: #f4bf75;
+}
+.busted-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(#151b27c9, #190d15ed);
+  backdrop-filter: blur(6px);
+}
+.busted-card {
+  text-align: center;
+  max-width: 520px;
+  padding: 35px;
+}
+.busted-card .eyebrow {
+  color: #f27786;
+  font-size: 14px;
+}
+.busted-card h2 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: clamp(78px, 16vw, 140px);
+  font-weight: 600;
+  line-height: 1;
+  margin: 15px 0;
+  color: #f04860;
+  letter-spacing: 0.06em;
+  text-shadow: 0 7px 30px #d92c4833;
+}
+.busted-card p {
+  font-size: 17px;
+  color: #d5dce4;
+  margin: 22px 0 30px;
+}
+#restart {
+  background: #e9eef2;
+  color: #17212c;
+  border: 0;
+  font-size: 17px;
+  font-weight: 700;
+  padding: 15px 25px;
+  min-width: 230px;
+}
+#restart:hover {
+  background: #fff;
+}
+#restart span {
+  margin-left: 30px;
+}
+.busted-card small {
+  display: block;
+  margin-top: 18px;
+  color: #b2bdc9;
+  font-size: 13px;
+}
+body.busted .hud,
+body.busted #toast {
+  visibility: hidden;
+}
+@media (max-width: 700px) {
+  .wanted {
+    right: 15px;
+    top: 95px;
+    width: 220px;
+    padding: 12px 14px;
+  }
+  .wanted strong {
+    font-size: 15px;
+  }
+  .wanted p {
+    font-size: 13px;
+  }
+  .theft {
+    bottom: 155px;
+    min-width: 220px;
+  }
+  .bottom-center {
+    display: none;
+  }
+  body.wanted .mission {
+    display: none;
+  }
+  .location {
+    max-width: 42vw;
+  }
+  #wanted-stars {
+    font-size: 17px;
+  }
+}
+@media (max-height: 620px) {
+  .wanted {
+    top: 80px;
+  }
+  .theft {
+    bottom: 115px;
+  }
+  body.wanted .mission {
+    display: none;
+  }
+}

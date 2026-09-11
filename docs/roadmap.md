@@ -2,6 +2,10 @@
 
 The first slice is Russian Hill: an exact 1,000 × 1,000 m tile including crooked Lombard and steep Filbert. Bradford, Golden Gate Bridge, Coit Tower, Pier 39 and Transamerica Pyramid are outside this tile. Their real coordinates are recorded; they are not moved into the tile to imply coverage.
 
+## Browser v0.3 delivered
+
+Citywide population within the imported district: 40 moving vehicles (four patrol units), 16 parked cars, 150 residents, business/home frontages, coffee/dining/chat/rest activities and shared solid furniture. Non-graphic impact outcomes feed a police response; 60 seconds out of sight clears wanted, sustained capture gives BUSTED/restart. Holding E transfers a nearby vehicle without resetting its physical state. Remaining work includes on-foot entry animations, multiple authored vehicle bodies, full signals/merges and skeletal character rigs.
+
 ## Browser v0.2 delivered
 
 The public companion now has a licensed detailed body/interior, impact dents/scratches/cracked glass, connected physical traffic, 42 stylized walking adults, and matching visible/physical roadside objects. Seamless terrain collision replaces overlapping road boxes. These browser changes do not complete the native UE slice or the production art/AI gates below.

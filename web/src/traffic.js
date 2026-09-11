@@ -15,6 +15,7 @@ export class TrafficNetwork {
       maxY: 500,
     };
     this.edges = [];
+    this.nodePositions = new Map();
     this.outgoing = new Map();
     this.roads = new Map((city.roads || []).map((r) => [r.id, r]));
     const edges = city.graph?.edges;
@@ -60,6 +61,8 @@ export class TrafficNetwork {
       edge.points.slice(1).reduce((n, p, i) => n + dist(p, edge.points[i]), 0);
     if (edge.length < 0.5) return;
     this.edges.push(edge);
+    this.nodePositions.set(edge.from, edge.points[0]);
+    this.nodePositions.set(edge.to, edge.points.at(-1));
     if (!this.outgoing.has(edge.from)) this.outgoing.set(edge.from, []);
     this.outgoing.get(edge.from).push(edge);
   }
@@ -137,15 +140,17 @@ export class TrafficNetwork {
         p = route[index],
         next = route[index + 1];
       const d = dist(player, p);
-      if (d < 32 || d > 360) continue;
+      if (d < 26) continue;
       candidates.push({ d, p, next, edge, index });
     }
     candidates.sort(
       (a, b) => a.d - b.d || String(a.edge.id).localeCompare(String(b.edge.id)),
     );
-    const result = [];
-    for (const c of candidates) {
-      if (result.some((r) => dist(r.spawn, c.p) < 16)) continue;
+    const result = [],
+      chosen = [];
+    const nearbyCount = Math.min(count, Math.ceil(count * 0.35));
+    const add = (c) => {
+      if (chosen.some((p) => dist(p, c.p) < 13)) return false;
       result.push({
         spawn: {
           ...c.p,
@@ -157,9 +162,174 @@ export class TrafficNetwork {
           seed: result.length * 17 + 3,
         },
       });
-      if (result.length >= count) break;
+      chosen.push(c.p);
+      return true;
+    };
+    for (const c of candidates) {
+      if (result.length >= nearbyCount) break;
+      add(c);
+    }
+    while (result.length < count) {
+      let best = null,
+        bestScore = -1;
+      for (const c of candidates) {
+        const separation = Math.min(...chosen.map((p) => dist(p, c.p)));
+        if (separation < 13) continue;
+        // Farthest-point coverage distributes the rest across the whole tile,
+        // while the initial group guarantees traffic in the player's vicinity.
+        if (separation > bestScore) {
+          bestScore = separation;
+          best = c;
+        }
+      }
+      if (!best) break;
+      add(best);
     }
     return count > 0 ? result : [];
+  }
+  parkedCandidates(playerPosition, count, existing = []) {
+    const result = [],
+      used = existing.map((v) => ({
+        x: v.body.position.x,
+        y: -v.body.position.z,
+      }));
+    const intersections = (this.city.intersections || []).map((i) =>
+      pt(i.position || i),
+    );
+    for (const road of this.city.roads || []) {
+      if ((road.width || 0) < 9.75 || !road.points?.length) continue;
+      const points = road.points.map(pt);
+      for (let i = 3; i < points.length - 3; i += 3) {
+        const p = points[i],
+          a = points[i - 1],
+          b = points[i + 1],
+          dx = b.x - a.x,
+          dy = b.y - a.y,
+          len = Math.hypot(dx, dy) || 1;
+        const offset = road.width / 2 - 1.08;
+        const parked = {
+          x: p.x + (dy / len) * offset,
+          y: p.y - (dx / len) * offset,
+          z: p.z,
+        };
+        if (
+          intersections.some((j) => dist(j, p) < 14) ||
+          used.some((j) => dist(j, parked) < 10) ||
+          dist({ x: playerPosition.x, y: -playerPosition.z }, parked) < 12
+        )
+          continue;
+        result.push({
+          spawn: { ...parked, headingRadians: Math.atan2(dx, dy) },
+        });
+        used.push(parked);
+        if (result.length >= count) return count > 0 ? result : [];
+      }
+    }
+    return count > 0 ? result : [];
+  }
+  nearestEdge(position, heading = null) {
+    const p = { x: position.x, y: -position.z };
+    let best = null;
+    for (const edge of this.edges)
+      for (let i = 0; i < edge.points.length - 1; i++) {
+        const a = edge.points[i],
+          b = edge.points[i + 1],
+          dx = b.x - a.x,
+          dy = b.y - a.y,
+          l2 = dx * dx + dy * dy;
+        const t = clamp(
+            ((p.x - a.x) * dx + (p.y - a.y) * dy) / (l2 || 1),
+            0,
+            1,
+          ),
+          distance = Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+        const directionPenalty = heading
+          ? Math.max(
+              0,
+              1 - (heading.x * dx - heading.z * dy) / Math.sqrt(l2 || 1),
+            ) * 6
+          : 0;
+        const score = distance + directionPenalty;
+        if (!best || score < best.score) best = { edge, index: i, t, score };
+      }
+    return best;
+  }
+  rejoin(record) {
+    const state = this.nearestEdge(
+      record.body.position,
+      record.body.vectorToWorldFrame(new CANNON.Vec3(0, 0, -1)),
+    );
+    if (state) this.attach(record, { ...state, seed: record.body.id });
+  }
+  pathBetween(from, to) {
+    if (from === to) return [];
+    const goal = this.nodePositions.get(to);
+    if (!goal) return null;
+    const open = [{ node: from, cost: 0, priority: 0 }],
+      costs = new Map([[from, 0]]),
+      came = new Map();
+    let count = 0;
+    while (open.length && count++ < 6000) {
+      open.sort((a, b) => a.priority - b.priority);
+      const current = open.shift();
+      if (current.cost !== costs.get(current.node)) continue;
+      if (current.node === to) {
+        const result = [];
+        let cursor = to;
+        while (cursor !== from) {
+          const e = came.get(cursor);
+          if (!e) return null;
+          result.push(e);
+          cursor = e.from;
+        }
+        return result.reverse();
+      }
+      for (const edge of this.outgoing.get(current.node) || []) {
+        const nextCost = current.cost + edge.length;
+        if (nextCost < (costs.get(edge.to) ?? Infinity)) {
+          costs.set(edge.to, nextCost);
+          came.set(edge.to, edge);
+          open.push({
+            node: edge.to,
+            cost: nextCost,
+            priority: nextCost + dist(edge.points.at(-1), goal),
+          });
+        }
+      }
+    }
+    return null;
+  }
+  routeTo(record, worldTarget) {
+    const start = this.nearestEdge(
+        record.body.position,
+        record.body.vectorToWorldFrame(new CANNON.Vec3(0, 0, -1)),
+      ),
+      goal = this.nearestEdge(worldTarget);
+    if (!start || !goal) return false;
+    let route,
+      edges = [];
+    if (start.edge.id === goal.edge.id && goal.index >= start.index)
+      route = this.#lanePoints(start.edge).slice(start.index, goal.index + 2);
+    else {
+      const middle = this.pathBetween(start.edge.to, goal.edge.from);
+      if (!middle) return false;
+      edges = [start.edge, ...middle, goal.edge];
+      route = this.#lanePoints(start.edge).slice(start.index);
+      for (const e of middle) route.push(...this.#lanePoints(e).slice(1));
+      route.push(...this.#lanePoints(goal.edge).slice(1, goal.index + 2));
+    }
+    if (route.length < 2) return false;
+    record.navigation = {
+      edge: goal.edge,
+      route,
+      seed: record.body.id,
+      transitions: edges.length,
+      stuckTime: record.navigation?.stuckTime || 0,
+      reverseTime: 0,
+      yieldTime: 0,
+    };
+    record.route = route;
+    return true;
   }
   attach(record, state) {
     record.navigation = {
@@ -176,6 +346,7 @@ export class TrafficNetwork {
     this.#extend(record);
   }
   #extend(record) {
+    if (record.chaseTarget) return;
     const n = record.navigation;
     let distance = n.route
       .slice(1)
@@ -193,6 +364,10 @@ export class TrafficNetwork {
     record.route = n.route;
   }
   update(record, sim, dt) {
+    if (record.chaseTarget && sim.elapsed >= (record.nextChaseRouteAt || 0)) {
+      this.routeTo(record, record.chaseTarget);
+      record.nextChaseRouteAt = sim.elapsed + 1.1;
+    }
     const n = record.navigation,
       c = record.controls,
       body = record.body,
@@ -229,6 +404,19 @@ export class TrafficNetwork {
       }
       previous = p;
     }
+    // Within an unobstructed close chase, steer toward the actual target rather
+    // than a lane waypoint behind it. All motion still uses tyre forces.
+    const closeChase =
+      record.chaseTarget &&
+      record.hasVisualTarget &&
+      body.position.distanceTo(record.chaseTarget) < 23;
+    if (closeChase)
+      target = {
+        x: record.chaseTarget.x,
+        y: -record.chaseTarget.z,
+        z: record.chaseTarget.y,
+        speedKph: 45,
+      };
     const local = body.pointToLocalFrame(
       new CANNON.Vec3(target.x, target.z, -target.y),
     );
@@ -242,7 +430,10 @@ export class TrafficNetwork {
       -1,
       1,
     );
-    let desiredSpeed = Math.min(34, target.speedKph || 32) / 3.6;
+    let desiredSpeed =
+      (record.chaseTarget
+        ? Math.min(68, Math.max(32, (sim.speedKph || 0) + 20))
+        : Math.min(34, target.speedKph || 32)) / 3.6;
     desiredSpeed *= 1 - 0.64 * clamp(Math.abs(angle) / 0.9, 0, 1);
     const tail = n.route.at(-1);
     if (
@@ -256,7 +447,8 @@ export class TrafficNetwork {
     let hazard = false;
     const vehicles = [sim.vehicle, ...sim.traffic];
     for (const other of vehicles) {
-      if (other === record) continue;
+      if (other === record || (record.chaseTarget && other === sim.vehicle))
+        continue;
       const rel = body.pointToLocalFrame(other.body.position),
         ahead = -rel.z;
       if (Math.abs(rel.y) > 3) continue;
@@ -268,9 +460,22 @@ export class TrafficNetwork {
         const safeSpeed = Math.max(0, (ahead - 6) * 0.62);
         desiredSpeed = Math.min(desiredSpeed, safeSpeed);
         hazard = true;
+        // Police can move around a stopped queue; ordinary traffic continues to
+        // wait. Low-speed physical contact can push a blocker, never teleport it.
+        if (
+          record.chaseTarget &&
+          other.body.velocity.length() < 1.4 &&
+          ahead < 15
+        ) {
+          desiredSpeed = Math.max(desiredSpeed, 1.7);
+          record.avoidUntil = sim.elapsed + 1;
+          record.avoidDirection = rel.x > 0.3 ? -1 : rel.x < -0.3 ? 1 : -1;
+          hazard = false;
+        }
       }
       // Stable priority prevents mutual yielding. A safety gap still blocks motion.
       if (
+        !record.chaseTarget &&
         other.body.id < body.id &&
         ahead > 1 &&
         ahead < 13 &&
@@ -285,6 +490,8 @@ export class TrafficNetwork {
         }
       }
     }
+    if (record.chaseTarget && sim.elapsed < (record.avoidUntil || 0))
+      c.steer = clamp(c.steer + (record.avoidDirection || -1) * 0.55, -1, 1);
     const pedestrians =
       sim.pedestrianBodies ||
       (sim.pedestrians?.length
@@ -304,7 +511,20 @@ export class TrafficNetwork {
         hazard = true;
       }
     }
-    c.throttle = clamp((desiredSpeed - speed) * 0.42, 0, 0.85);
+    if (closeChase)
+      desiredSpeed = Math.min(
+        desiredSpeed,
+        Math.max(
+          0,
+          (body.position.distanceTo(record.chaseTarget) - 4.5) * 1.25,
+        ) +
+          ((sim.speedKph || 0) / 3.6) * 0.6,
+      );
+    c.throttle = clamp(
+      (desiredSpeed - speed) * 0.42,
+      0,
+      record.chaseTarget ? 1 : 0.85,
+    );
     c.brake =
       speed > desiredSpeed + 0.5
         ? clamp((speed - desiredSpeed) * 0.22, 0, 0.9)

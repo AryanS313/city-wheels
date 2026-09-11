@@ -511,7 +511,7 @@ export function createSidewalkRoutes(city, sampleElevation, objects = []) {
   return routes;
 }
 
-function personVisual(seed) {
+function personVisual(seed, activity = "walk", persona = "resident") {
   const rng = seeded(seed),
     group = new THREE.Group();
   const skins = [0xe8bc96, 0xc68b65, 0x8d573b, 0x5d3829, 0xd5a57e];
@@ -570,7 +570,8 @@ function personVisual(seed) {
     );
   mesh(group, sphere, skin, [0, 0.649, -0.137], [0.021, 0.032, 0.032]);
   const arms = [],
-    legs = [];
+    legs = [],
+    knees = [];
   for (const side of [-1, 1]) {
     const arm = new THREE.Group();
     arm.position.set(side * 0.25, 0.35, 0);
@@ -584,181 +585,696 @@ function personVisual(seed) {
     group.add(leg);
     legs.push(leg);
     mesh(leg, capsule, pants, [0, -0.188, 0], [0.08, 0.135, 0.085]);
-    mesh(leg, capsule, pants, [0, -0.49, 0], [0.06, 0.133, 0.067]);
-    mesh(leg, sphere, shoe, [0, -0.701, -0.05], [0.082, 0.062, 0.152]);
+    const knee = new THREE.Group();
+    knee.position.y = -0.37;
+    leg.add(knee);
+    knees.push(knee);
+    mesh(knee, capsule, pants, [0, -0.12, 0], [0.06, 0.133, 0.067]);
+    mesh(knee, sphere, shoe, [0, -0.331, -0.05], [0.082, 0.062, 0.152]);
   }
   if (rng() > 0.57) {
     const pack = material(0x6f503e);
     mesh(group, sphere, pack, [0, 0.16, 0.18], [0.17, 0.23, 0.09]);
+  }
+  const accessories = [];
+  if (activity === "coffee" || activity === "dine") {
+    const cupMaterial = material(0xf4eee2),
+      lidMaterial = material(0x3f3733);
+    const cup = mesh(
+      arms[0],
+      new THREE.CylinderGeometry(0.045, 0.036, 0.12, 8),
+      cupMaterial,
+      [0, -0.56, -0.025],
+      [1, 1, 1],
+    );
+    mesh(cup, sphere, lidMaterial, [0, 0.065, 0], [0.048, 0.012, 0.048]);
+    accessories.push(cupMaterial, lidMaterial);
+    if (activity === "dine") {
+      mesh(group, sphere, cupMaterial, [0, 0.18, -0.43], [0.19, 0.014, 0.16]);
+      mesh(
+        group,
+        sphere,
+        lidMaterial,
+        [0.02, 0.205, -0.43],
+        [0.09, 0.025, 0.07],
+      );
+    }
+  }
+  if (activity === "rest" || persona === "unhoused-resident") {
+    const belongings = material([0x526456, 0x696879, 0x785e46][seed % 3]);
+    accessories.push(belongings);
+    mesh(group, capsule, belongings, [0.39, -0.54, 0.03], [0.13, 0.12, 0.17]);
+    if (persona === "unhoused-resident")
+      mesh(group, sphere, belongings, [0.43, -0.73, 0.04], [0.27, 0.09, 0.14]);
   }
   group.scale.setScalar(0.94 + rng() * 0.12);
   return {
     group,
     arms,
     legs,
-    materials: [skin, shirt, pants, shoe, hair, eyes],
+    knees,
+    materials: [skin, shirt, pants, shoe, hair, eyes, ...accessories],
     geometries: [sphere, capsule, hairGeo],
   };
 }
 
-/** Adults move by physical forces. Impacts release angular constraints; recovery occurs in-place. */
+/** Deliberate arcade outcome thresholds, not estimates of real-world injury risk. */
+export const PEDESTRIAN_IMPACT_TUNING = Object.freeze({
+  staggerMinMps: 1.6,
+  injuryMinMps: 6,
+  fatalRelativeMps: 15,
+  fatalNormalMps: 11,
+  repeatContactCooldownSeconds: 1.0,
+  minorRecoverySeconds: 3.2,
+});
+export function classifyPedestrianImpact(
+  normalImpactMps,
+  relativeSpeedMps,
+  tuning = PEDESTRIAN_IMPACT_TUNING,
+) {
+  if (normalImpactMps < tuning.staggerMinMps) return null;
+  if (
+    relativeSpeedMps >= tuning.fatalRelativeMps &&
+    normalImpactMps >= tuning.fatalNormalMps
+  )
+    return "fatal";
+  if (normalImpactMps >= tuning.injuryMinMps) return "injured";
+  return "stagger";
+}
+const ACTIVITIES = [
+  "walk",
+  "walk",
+  "walk",
+  "walk",
+  "walk",
+  "walk",
+  "chat",
+  "coffee",
+  "dine",
+  "rest",
+];
+const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+// Articulated transforms are retained, but all residents share four instanced
+// draws instead of allocating several thousand independently rendered meshes.
+class PersonBatches {
+  constructor(group, capacity = 220) {
+    this.group = group;
+    this.material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.82,
+    });
+    this.entries = new Map();
+    const shapes = {
+      sphere: new THREE.SphereGeometry(1, 10, 8),
+      capsule: new THREE.CapsuleGeometry(1, 1, 3, 8),
+      hair: new THREE.SphereGeometry(
+        1,
+        10,
+        6,
+        0,
+        Math.PI * 2,
+        0,
+        Math.PI * 0.57,
+      ),
+      cylinder: new THREE.CylinderGeometry(1, 0.85, 1, 8),
+    };
+    for (const [kind, geometry] of Object.entries(shapes)) {
+      const mesh = new THREE.InstancedMesh(
+        geometry,
+        this.material,
+        capacity * 32,
+      );
+      mesh.count = 0;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.frustumCulled = false;
+      mesh.castShadow = kind === "sphere" || kind === "capsule";
+      mesh.receiveShadow = true;
+      mesh.name = `Residents ${kind}`;
+      this.entries.set(kind, { mesh, next: 0 });
+      group.add(mesh);
+    }
+    this.matrix = new THREE.Matrix4();
+    this.geometryScale = new THREE.Matrix4();
+  }
+  add(visual) {
+    const parts = [];
+    visual.group.traverse((node) => {
+      if (!node.isMesh) return;
+      const params = node.geometry.parameters || {};
+      const kind =
+        node.geometry.type === "CapsuleGeometry"
+          ? "capsule"
+          : node.geometry.type === "CylinderGeometry"
+            ? "cylinder"
+            : params.thetaLength && params.thetaLength < Math.PI
+              ? "hair"
+              : "sphere";
+      const entry = this.entries.get(kind);
+      if (entry.next >= entry.mesh.instanceMatrix.count)
+        throw new Error("Resident visual pool exceeded");
+      const index = entry.next++;
+      entry.mesh.count = entry.next;
+      entry.mesh.setColorAt(
+        index,
+        node.material.color || new THREE.Color(0xffffff),
+      );
+      const scale =
+        kind === "cylinder"
+          ? [params.radiusTop || 1, params.height || 1, params.radiusTop || 1]
+          : [1, 1, 1];
+      parts.push({
+        node,
+        entry,
+        index,
+        scale,
+        detail:
+          Math.max(
+            node.scale.x * scale[0],
+            node.scale.y * scale[1],
+            node.scale.z * scale[2],
+          ) < 0.075,
+      });
+      node.visible = false;
+    });
+    const geometries = new Set(),
+      materials = new Set();
+    visual.group.traverse((node) => {
+      if (node.isMesh) {
+        geometries.add(node.geometry);
+        materials.add(node.material);
+      }
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const mat of materials) mat.dispose();
+    visual.parts = parts;
+    return visual;
+  }
+  sync(visual, distance) {
+    visual.group.updateMatrixWorld(true);
+    for (const part of visual.parts) {
+      if (distance > 600 || (part.detail && distance > 85)) {
+        part.entry.mesh.setMatrixAt(part.index, ZERO_MATRIX);
+        continue;
+      }
+      this.matrix.copy(part.node.matrixWorld);
+      if (part.scale[0] !== 1 || part.scale[1] !== 1)
+        this.matrix.multiply(this.geometryScale.makeScale(...part.scale));
+      part.entry.mesh.setMatrixAt(part.index, this.matrix);
+    }
+  }
+  finish() {
+    for (const { mesh } of this.entries.values()) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+  }
+  reset() {
+    for (const e of this.entries.values()) {
+      e.next = 0;
+      e.mesh.count = 0;
+    }
+  }
+  dispose() {
+    for (const { mesh } of this.entries.values()) {
+      mesh.geometry.dispose();
+      mesh.removeFromParent();
+    }
+    this.material.dispose();
+  }
+}
+
+/** Full-district population. Outcome state remains attached to each physical body. */
 export class AmbientLife {
   constructor(city, sim, scene, options = {}) {
     this.city = city;
     this.sim = sim;
     this.scene = scene;
+    this.options = options;
     this.elapsed = 0;
     this.people = [];
+    this.events = [];
+    this.nextId = 0;
+    this.visualElapsed = 0;
     this.group = new THREE.Group();
-    this.group.name = "Ambient pedestrians";
+    this.group.name = "District residents";
     scene.add(this.group);
-    this.options = options;
     this.random = seeded(options.seed ?? 7259);
     this.material = new CANNON.Material("ambient-person");
-    // Cannon's friction equation cap is an impulse. Scale the character's .12
-    // effective sliding coefficient by the fixed step; controller forces provide
-    // walking traction while the capsule remains fully dynamic for impacts.
     this.contactMaterial = new CANNON.ContactMaterial(
       this.material,
       sim.world.defaultMaterial,
       { friction: 0.12 / 60, restitution: 0.015 },
     );
+    this.personContactMaterial = new CANNON.ContactMaterial(
+      this.material,
+      this.material,
+      { friction: 0.08 / 60, restitution: 0 },
+    );
     sim.world.addContactMaterial(this.contactMaterial);
-    // Explicit default material preserves existing contacts and enables the
-    // low-friction capsule/controller pair without reducing road tyre grip.
+    sim.world.addContactMaterial(this.personContactMaterial);
     for (const body of sim.world.bodies)
       if (!body.material) body.material = sim.world.defaultMaterial;
+    this.objects = options.objects || options.streetObjects || [];
+    this.index = new LayoutIndex(city);
     this.routes = createSidewalkRoutes(
       city,
       (x, y) => sim.sampleElevation(x, y),
-      options.objects || options.streetObjects || [],
+      this.objects,
     );
-    const player = sim.vehicle.body.position;
-    const candidates = [];
-    for (const route of this.routes)
-      for (let index = 2; index < route.points.length - 2; index += 4) {
-        const p = route.points[index],
-          distance = Math.hypot(p[0] - player.x, p[2] - player.z);
-        if (distance > 8 && distance < (options.radius ?? 440))
-          candidates.push({
-            route,
-            index,
-            p,
-            distance,
-            score: distance + this.random() * 90,
-            scatter: this.random(),
-          });
-      }
-    candidates.sort((a, b) => a.score - b.score);
-    const nearby = candidates.filter((c) => c.distance < 160),
-      farther = candidates
-        .filter((c) => c.distance >= 160)
-        .sort((a, b) => a.scatter - b.scatter);
-    let nearSpawned = 0;
-    for (const candidate of [...nearby, ...farther]) {
-      if (this.people.length >= (options.count ?? 42)) break;
-      if (
-        candidate.distance < 160 &&
-        nearSpawned >= (options.nearCount ?? 26) &&
-        farther.length
-      )
-        continue;
-      if (
-        this.people.some(
-          (person) =>
-            Math.hypot(
-              person.body.position.x - candidate.p[0],
-              person.body.position.z - candidate.p[2],
-            ) < 4.2,
-        )
-      )
-        continue;
-      if (
-        [sim.vehicle, ...sim.traffic].some(
-          (car) =>
-            Math.hypot(
-              car.body.position.x - candidate.p[0],
-              car.body.position.z - candidate.p[2],
-            ) < 5,
-        )
-      )
-        continue;
-      this.spawn(candidate);
-      if (candidate.distance < 160) nearSpawned++;
-    }
-    // Cannon dispatches preStep AFTER solving contacts. Queue forces in postStep
-    // instead, so the following fixed-step contact solver sees intended motion.
+    this.batches = new PersonBatches(this.group, (options.count ?? 150) + 48);
+    this.populate();
     this._postStep = () => this.physicsStep(sim.world.dt || 1 / 60);
     sim.world.addEventListener("postStep", this._postStep);
     this.physicsStep(0);
+    this.update(0);
   }
-  spawn(candidate) {
-    const { route, index, p } = candidate,
-      seed = Math.floor(this.random() * 0xffffffff),
-      visual = personVisual(seed);
+  get populationStats() {
+    const stats = {
+      count: this.people.length,
+      activities: {},
+      outcomes: {},
+      personas: {},
+      drawBatches: this.batches.entries.size,
+    };
+    for (const p of this.people) {
+      stats.activities[p.activity] = (stats.activities[p.activity] || 0) + 1;
+      stats.outcomes[p.outcome] = (stats.outcomes[p.outcome] || 0) + 1;
+      stats.personas[p.persona] = (stats.personas[p.persona] || 0) + 1;
+    }
+    return stats;
+  }
+  vehicles() {
+    return this.sim.world.bodies.filter((body) => body.isVehicle);
+  }
+  focusPosition() {
+    return this.sim.playerBody?.position || this.sim.vehicle.body.position;
+  }
+  refreshPedestrianBodies() {
+    this.sim.pedestrianBodies = this.sim.world.bodies.filter(
+      (body) => body.isPedestrian,
+    );
+  }
+  furnitureClear(p, ignoreSeat = false, ignoreObstacleIds = []) {
+    for (const o of this.objects) {
+      if (!o.position || ignoreObstacleIds.includes(o.id)) continue;
+      const distance = Math.hypot(p[0] - o.position[0], p[2] - o.position[2]);
+      if (
+        ignoreSeat &&
+        ["chair", "seat", "bench"].some((term) =>
+          String(o.kind || o.type || o.id).includes(term),
+        ) &&
+        distance < 0.65
+      )
+        continue;
+      const radius = o.radius ?? Math.hypot(o.width || 0, o.depth || 0) / 2;
+      if (distance < radius + 0.28) return false;
+    }
+    return true;
+  }
+  validSpawn(
+    p,
+    { seated = false, minSpacing = 1.25, ignoreObstacleIds = [] } = {},
+  ) {
+    if (
+      !p?.every(Number.isFinite) ||
+      !this.index.clear(p[0], -p[2], 0.24) ||
+      !this.furnitureClear(p, seated, ignoreObstacleIds)
+    )
+      return false;
+    if (
+      this.people.some(
+        (person) =>
+          Math.hypot(
+            person.body.position.x - p[0],
+            person.body.position.z - p[2],
+          ) < minSpacing,
+      )
+    )
+      return false;
+    return !this.vehicles().some(
+      (body) =>
+        Math.hypot(body.position.x - p[0], body.position.z - p[2]) < 4.4,
+    );
+  }
+  routeNear(p) {
+    let best = null,
+      bestDistance = Infinity;
+    for (const route of this.routes)
+      for (let index = 0; index < route.points.length; index++) {
+        const point = route.points[index],
+          distance = Math.hypot(point[0] - p[0], point[2] - p[2]);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = { route, index, p: point, distance };
+        }
+      }
+    return best;
+  }
+  populate() {
+    const requested = this.options.count ?? 150,
+      player = this.focusPosition();
+    const candidates = [];
+    for (const route of this.routes)
+      for (let index = 2; index < route.points.length - 2; index += 3) {
+        const p = route.points[index],
+          distance = Math.hypot(p[0] - player.x, p[2] - player.z);
+        if (distance < 7) continue;
+        candidates.push({
+          route,
+          index,
+          p,
+          distance,
+          score: distance + this.random() * 45,
+          random: this.random(),
+        });
+      }
+    const spawnPlan = (candidate, extra = {}) => {
+      if (
+        this.people.length >= requested ||
+        !this.validSpawn(candidate.p, {
+          seated: extra.posture === "seated",
+          minSpacing: extra.activity === "chat" ? 1.0 : 1.05,
+          ignoreObstacleIds: extra.ignoreObstacleIds || [],
+        })
+      )
+        return false;
+      this.spawn({ ...candidate, ...extra });
+      return true;
+    };
+    // Preserve a visible first drive while distributing most residents across all cells.
+    const nearTarget = Math.min(24, Math.floor(requested * 0.2));
+    for (const c of [...candidates].sort((a, b) => a.score - b.score)) {
+      if (this.people.length >= nearTarget) break;
+      spawnPlan(c, {
+        activity: ACTIVITIES[this.people.length % ACTIVITIES.length],
+      });
+    }
+    const spots = [...(this.options.activitySpots || [])].sort(
+      (a, b) => hash(a.id) - hash(b.id),
+    );
+    for (const spot of spots) {
+      if (this.people.length >= Math.floor(requested * 0.53)) break;
+      const participants = spot.participants?.length
+        ? spot.participants
+        : [
+            {
+              position: spot.position,
+              facing: spot.facing,
+              posture: spot.posture,
+              seatHeight: spot.seatHeight,
+            },
+          ];
+      for (const participant of participants.slice(
+        0,
+        spot.capacity || participants.length,
+      )) {
+        const point = participant.position;
+        if (!point) continue;
+        const near = this.routeNear(point);
+        if (!near || near.distance > 18) continue;
+        const p = [
+          point[0],
+          this.sim.sampleElevation(point[0], -point[2]),
+          point[2],
+        ];
+        const activity = ["chat", "coffee", "dine", "rest"].includes(spot.type)
+          ? spot.type
+          : "chat";
+        spawnPlan(
+          { ...near, p },
+          {
+            activity,
+            spotId: spot.id,
+            placeId: spot.placeId,
+            posture: participant.posture || spot.posture || "standing",
+            seatHeight: participant.seatHeight ?? spot.seatHeight ?? 0.45,
+            facing: participant.facing ?? spot.facing ?? 0,
+            persona: spot.persona || "resident",
+            ignoreObstacleIds:
+              participant.ignoreObstacleIds ||
+              [participant.ownObstacleId].filter(Boolean),
+          },
+        );
+      }
+    }
+    const bounds = this.city.bounds || {
+      minX: -500,
+      maxX: 500,
+      minY: -500,
+      maxY: 500,
+    };
+    const cellSize = (bounds.maxX - bounds.minX) / 5,
+      cells = new Map();
+    for (const c of candidates) {
+      const key = `${Math.floor((c.p[0] - bounds.minX) / cellSize)},${Math.floor((-c.p[2] - bounds.minY) / cellSize)}`;
+      if (!cells.has(key)) cells.set(key, []);
+      cells.get(key).push(c);
+    }
+    for (const list of cells.values()) list.sort((a, b) => a.random - b.random);
+    let progress = true;
+    while (this.people.length < requested && progress) {
+      progress = false;
+      for (const [key, list] of [...cells.entries()].sort(
+        (a, b) => hash(a[0]) - hash(b[0]),
+      )) {
+        while (list.length) {
+          const c = list.pop();
+          const activity = ACTIVITIES[this.people.length % ACTIVITIES.length];
+          if (spawnPlan(c, { activity })) {
+            progress = true;
+            break;
+          }
+        }
+      }
+    }
+    // Fictional unhoused residents are represented by rest and belongings, with
+    // the same appearance distribution, behavior rules, mass, and vulnerability.
+    const rests = this.people.filter((p) => p.activity === "rest");
+    for (let i = 0; i < Math.min(6, rests.length); i++)
+      rests[i].persona = "unhoused-resident";
+  }
+  spawn(candidate, { occupant = false } = {}) {
+    const { route, index = 0, p } = candidate,
+      seed = candidate.seed ?? Math.floor(this.random() * 0xffffffff);
+    const activity = candidate.activity || "walk",
+      persona =
+        candidate.persona ||
+        (activity === "rest" && seed % 3 === 0
+          ? "unhoused-resident"
+          : "resident");
+    const seated =
+      ["seated", "resting"].includes(candidate.posture) &&
+      ["dine", "rest", "coffee"].includes(activity);
+    const halfSpan = seated ? 0.3 : 0.6,
+      bodyHeight = seated ? 0.6 : 1.2;
+    const centerOffset = seated ? (candidate.seatHeight ?? 0.45) + 0.52 : 0.85;
     const body = new CANNON.Body({
       mass: 75,
       material: this.material,
-      position: new CANNON.Vec3(p[0], p[1] + 0.85, p[2]),
+      position: new CANNON.Vec3(p[0], p[1] + centerOffset, p[2]),
       fixedRotation: true,
       linearDamping: 0.25,
       angularDamping: 0.5,
-      allowSleep: false,
+      allowSleep: activity !== "walk",
     });
-    body.addShape(new CANNON.Cylinder(0.22, 0.22, 1.2, 8));
-    body.addShape(new CANNON.Sphere(0.22), new CANNON.Vec3(0, 0.6, 0));
-    body.addShape(new CANNON.Sphere(0.22), new CANNON.Vec3(0, -0.6, 0));
+    body.addShape(new CANNON.Cylinder(0.22, 0.22, bodyHeight, 8));
+    body.addShape(new CANNON.Sphere(0.22), new CANNON.Vec3(0, halfSpan, 0));
+    body.addShape(new CANNON.Sphere(0.22), new CANNON.Vec3(0, -halfSpan, 0));
     body.isPedestrian = true;
     body.surface = "pedestrian";
     body.collisionResponse = true;
+    body.collisionFilterGroup = this.options.collisionGroup ?? 4;
+    body.collisionFilterMask = this.options.collisionMask ?? -1;
     const direction = this.random() > 0.5 ? 1 : -1,
       target = clamp(index + direction, 0, route.points.length - 1);
+    const id = candidate.id || `resident-${this.nextId++}`;
+    body.personId = id;
+    const visual = this.batches.add(personVisual(seed, activity, persona));
+    this.group.add(visual.group);
     const person = {
-      id: `adult-${this.people.length}`,
+      id,
       body,
       visual,
       route,
       target,
       direction,
-      speed: 1.12 + this.random() * 0.4,
+      speed: 1.08 + this.random() * 0.5,
       phase: this.random() * Math.PI * 2,
       fallUntil: 0,
       recovering: false,
-      yaw: 0,
+      yaw: (candidate.facing ?? 0) + Math.PI,
       seed,
+      activity,
+      persona,
+      seated,
+      visualOffsetY: seated ? -0.4 : 0,
+      centerOffset,
+      anchor: [...p],
+      outcome: "healthy",
+      lastImpactAt: -100,
+      reportedOutcomes: new Set(),
+      desiredVelocity: [0, 0],
+      nextThinkAt: 0,
+      nextVisualAt: 0,
+      spotId: candidate.spotId,
+      placeId: candidate.placeId,
+      occupant,
+      alarmedUntil: 0,
+      seatHeight: candidate.seatHeight ?? 0.45,
+    };
+    person.plan = {
+      route,
+      index,
+      p: [...p],
+      seed,
+      activity,
+      persona,
+      posture: candidate.posture,
+      seatHeight: candidate.seatHeight,
+      facing: candidate.facing,
+      spotId: candidate.spotId,
+      placeId: candidate.placeId,
+      id,
     };
     body.addEventListener("collide", (event) => {
       if (!event.body?.isVehicle) return;
-      const impact = Math.abs(event.contact.getImpactVelocityAlongNormal());
-      if (impact < 1.6 || this.elapsed < person.fallUntil) return;
-      person.fallUntil = this.elapsed + 4.5 + this.random() * 2;
-      person.recovering = false;
-      body.fixedRotation = false;
-      body.updateMassProperties();
-      body.angularVelocity.x +=
-        (event.body.velocity.z - body.velocity.z) * 0.32;
-      body.angularVelocity.z -=
-        (event.body.velocity.x - body.velocity.x) * 0.32;
-      body.wakeUp();
+      const normal = Math.abs(event.contact.getImpactVelocityAlongNormal());
+      const relative = event.body.velocity.vsub(body.velocity).length();
+      this.handleVehicleImpact(person, event.body, normal, relative);
     });
+    body.quaternion.setFromAxisAngle(UP, person.yaw);
     this.sim.world.addBody(body);
-    this.group.add(visual.group);
     this.people.push(person);
-    this.syncPerson(person, 0);
+    this.refreshPedestrianBodies();
+    this.syncPerson(person, 0, true);
+    return person;
+  }
+  handleVehicleImpact(person, vehicleBody, normalImpactMps, relativeSpeedMps) {
+    if (
+      person.outcome === "fatal" ||
+      this.elapsed - person.lastImpactAt <
+        PEDESTRIAN_IMPACT_TUNING.repeatContactCooldownSeconds
+    )
+      return null;
+    const outcome = classifyPedestrianImpact(
+      normalImpactMps,
+      relativeSpeedMps,
+      this.options.impactTuning || PEDESTRIAN_IMPACT_TUNING,
+    );
+    if (!outcome || (person.outcome === "injured" && outcome !== "fatal"))
+      return null;
+    person.lastImpactAt = this.elapsed;
+    const { body } = person;
+    person.outcome = outcome;
+    person.recovering = false;
+    person.seated = false;
+    person.visualOffsetY = 0;
+    person.fallUntil =
+      outcome === "stagger"
+        ? this.elapsed + PEDESTRIAN_IMPACT_TUNING.minorRecoverySeconds
+        : Infinity;
+    body.isInjured = outcome === "injured";
+    body.isDead = outcome === "fatal";
+    body.fixedRotation = false;
+    body.updateMassProperties();
+    body.linearDamping = outcome === "stagger" ? 0.4 : 0.68;
+    body.allowSleep = outcome !== "stagger";
+    body.angularVelocity.x += (vehicleBody.velocity.z - body.velocity.z) * 0.25;
+    body.angularVelocity.z -= (vehicleBody.velocity.x - body.velocity.x) * 0.25;
+    body.wakeUp();
+    const severity = outcome === "fatal" ? 2 : outcome === "injured" ? 1 : 0;
+    // Repeated solver contacts cannot duplicate a persistent outcome event.
+    if (person.reportedOutcomes.has(outcome) && outcome !== "stagger")
+      return null;
+    person.reportedOutcomes.add(outcome);
+    const event = {
+      type: "pedestrian-impact",
+      outcome,
+      severity,
+      vehicleId: vehicleBody.id,
+      vehicleKey: vehicleBody.vehicleId ?? `vehicle-${vehicleBody.id}`,
+      player: vehicleBody === this.sim.vehicle.body,
+      position: body.position.toArray(),
+      personId: person.id,
+      pedestrianId: person.id,
+      impactMps: normalImpactMps,
+      relativeSpeedMps,
+      time: this.elapsed,
+    };
+    this.events.push(event);
+    return event;
+  }
+  spawnOccupant(record) {
+    const car = record?.body || record;
+    if (!car?.position) return null;
+    const existing = this.people.find((p) => p.occupantVehicleId === car.id);
+    if (existing) return existing;
+    if (this.people.length >= (this.options.count ?? 150) + 32) return null;
+    const center = [car.position.x, car.position.y, car.position.z],
+      nearest = this.routeNear(center);
+    if (!nearest) return null;
+    const options = [];
+    for (const route of this.routes)
+      for (let i = 0; i < route.points.length; i++) {
+        const p = route.points[i],
+          d = Math.hypot(p[0] - center[0], p[2] - center[2]);
+        if (d >= 3.1 && d <= 16)
+          options.push({ route, index: i, p, distance: d });
+      }
+    options.sort((a, b) => a.distance - b.distance);
+    for (const candidate of options)
+      if (this.validSpawn(candidate.p)) {
+        const person = this.spawn(
+          {
+            ...candidate,
+            activity: "chat",
+            id: `occupant-${car.id}-${this.nextId++}`,
+          },
+          { occupant: true },
+        );
+        person.occupantVehicleId = car.id;
+        person.alarmedUntil = this.elapsed + 8;
+        person.yaw = Math.atan2(
+          person.body.position.x - car.position.x,
+          person.body.position.z - car.position.z,
+        );
+        return person;
+      }
+    return null;
+  }
+  exitOccupant(record) {
+    return this.spawnOccupant(record);
   }
   physicsStep(dt) {
     this.elapsed += dt;
-    if (dt > 0) this.contactMaterial.friction = 0.12 * dt;
+    if (dt > 0) {
+      this.contactMaterial.friction = 0.12 * dt;
+      this.personContactMaterial.friction = 0.08 * dt;
+    }
+    const vehicles = this.vehicles(),
+      player = this.focusPosition(),
+      neighbors = new Map();
+    for (const p of this.people) {
+      const key = `${Math.floor(p.body.position.x / 3)},${Math.floor(p.body.position.z / 3)}`;
+      if (!neighbors.has(key)) neighbors.set(key, []);
+      neighbors.get(key).push(p);
+    }
     for (const person of this.people) {
       const { body, route } = person;
-      if (person.fallUntil > this.elapsed) continue;
+      if (
+        person.outcome === "injured" ||
+        person.outcome === "fatal" ||
+        person.fallUntil > this.elapsed
+      )
+        continue;
       if (!body.fixedRotation) {
         if (
-          [this.sim.vehicle, ...this.sim.traffic].some(
+          vehicles.some(
             (car) =>
               Math.hypot(
-                car.body.position.x - body.position.x,
-                car.body.position.z - body.position.z,
+                car.position.x - body.position.x,
+                car.position.z - body.position.z,
               ) < 3.5,
           )
         )
@@ -783,95 +1299,185 @@ export class AmbientLife {
           body.fixedRotation = true;
           body.updateMassProperties();
           body.angularVelocity.setZero();
+          body.linearDamping = 0.25;
           person.recovering = false;
+          person.outcome = "healthy";
+          person.activity = "walk";
+          person.seated = false;
+          person.visualOffsetY = 0;
         } else continue;
       }
-      let target = route.points[person.target];
-      if (
-        Math.hypot(target[0] - body.position.x, target[2] - body.position.z) <
-        0.62
-      ) {
-        if (
-          person.target + person.direction >= route.points.length ||
-          person.target + person.direction < 0
-        )
-          person.direction *= -1;
-        person.target = clamp(
-          person.target + person.direction,
-          0,
-          route.points.length - 1,
-        );
-        target = route.points[person.target];
-      }
-      const dx = target[0] - body.position.x,
-        dz = target[2] - body.position.z,
-        distance = Math.hypot(dx, dz) || 1;
-      let vx = (dx / distance) * person.speed,
-        vz = (dz / distance) * person.speed;
-      // Pedestrians yield to each other and nearby traffic without entering the road.
-      for (const other of this.people) {
-        if (other === person) continue;
-        const ox = body.position.x - other.body.position.x,
-          oz = body.position.z - other.body.position.z,
-          dist = Math.hypot(ox, oz);
-        if (dist > 0 && dist < 0.85) {
-          vx += (ox / dist) * (0.85 - dist) * 2;
-          vz += (oz / dist) * (0.85 - dist) * 2;
+      const distanceToPlayer = Math.hypot(
+        body.position.x - player.x,
+        body.position.z - player.z,
+      );
+      if (this.elapsed >= person.nextThinkAt) {
+        person.nextThinkAt =
+          this.elapsed +
+          (distanceToPlayer < 160 ? 0 : distanceToPlayer < 330 ? 0.06 : 0.14);
+        let vx = 0,
+          vz = 0;
+        if (person.activity === "walk") {
+          let target = route.points[person.target];
+          if (
+            Math.hypot(
+              target[0] - body.position.x,
+              target[2] - body.position.z,
+            ) < 0.65
+          ) {
+            if (
+              person.target + person.direction >= route.points.length ||
+              person.target + person.direction < 0
+            )
+              person.direction *= -1;
+            person.target = clamp(
+              person.target + person.direction,
+              0,
+              route.points.length - 1,
+            );
+            target = route.points[person.target];
+          }
+          const dx = target[0] - body.position.x,
+            dz = target[2] - body.position.z,
+            distance = Math.hypot(dx, dz) || 1;
+          vx = (dx / distance) * person.speed;
+          vz = (dz / distance) * person.speed;
+          const cx = Math.floor(body.position.x / 3),
+            cz = Math.floor(body.position.z / 3);
+          for (let x = cx - 1; x <= cx + 1; x++)
+            for (let z = cz - 1; z <= cz + 1; z++)
+              for (const other of neighbors.get(`${x},${z}`) || []) {
+                if (other === person) continue;
+                const ox = body.position.x - other.body.position.x,
+                  oz = body.position.z - other.body.position.z,
+                  d = Math.hypot(ox, oz);
+                if (d > 0 && d < 0.9) {
+                  vx += (ox / d) * (0.9 - d) * 2.1;
+                  vz += (oz / d) * (0.9 - d) * 2.1;
+                }
+              }
+          for (const car of vehicles) {
+            const rx = car.position.x - body.position.x,
+              rz = car.position.z - body.position.z;
+            if (Math.hypot(rx, rz) < 3.1 && rx * vx + rz * vz > 0) {
+              vx *= 0.05;
+              vz *= 0.05;
+            }
+          }
+          if (Math.hypot(vx, vz) > 0.1) person.yaw = Math.atan2(-vx, -vz);
+        } else {
+          // Keep stationary conversations and café patrons at their clear anchor
+          // using bounded forces, never overwriting physical position/velocity.
+          vx = clamp((person.anchor[0] - body.position.x) * 3, -1, 1);
+          vz = clamp((person.anchor[2] - body.position.z) * 3, -1, 1);
         }
+        person.desiredVelocity = [vx, vz];
       }
-      for (const car of [this.sim.vehicle, ...this.sim.traffic]) {
-        const rx = car.body.position.x - body.position.x,
-          rz = car.body.position.z - body.position.z;
-        if (Math.hypot(rx, rz) < 3.0 && rx * vx + rz * vz > 0) {
-          vx *= 0.05;
-          vz *= 0.05;
-        }
-      }
-      const fx = 75 * (vx - body.velocity.x) * 5.5,
+      const [vx, vz] = person.desiredVelocity,
+        fx = 75 * (vx - body.velocity.x) * 5.5,
         fz = 75 * (vz - body.velocity.z) * 5.5,
         force = Math.hypot(fx, fz),
         scale = Math.min(1, 480 / (force || 1));
       body.force.x += fx * scale;
       body.force.z += fz * scale;
-      if (Math.hypot(vx, vz) > 0.1) person.yaw = Math.atan2(-vx, -vz);
       body.quaternion.setFromAxisAngle(UP, person.yaw);
       body.aabbNeedsUpdate = true;
     }
   }
-  syncPerson(person, dt) {
-    const { body, visual } = person;
+  syncPerson(person, dt, force = false) {
+    const { body, visual } = person,
+      distance = body.position.distanceTo(this.focusPosition());
+    if (!force && this.visualElapsed < person.nextVisualAt) return;
+    person.nextVisualAt =
+      this.visualElapsed + (distance < 110 ? 0 : distance < 250 ? 0.055 : 0.16);
     visual.group.position.copy(body.position);
+    visual.group.position.y += person.visualOffsetY;
     visual.group.quaternion.copy(body.quaternion);
-    const moving = person.fallUntil <= this.elapsed && !person.recovering,
-      speed = Math.hypot(body.velocity.x, body.velocity.z);
-    person.phase += Math.min(speed, 2.4) * dt * 5.4;
-    const walk = moving
-      ? Math.sin(person.phase) * Math.min(0.48, speed * 0.31)
-      : 0.14;
-    visual.legs[0].rotation.x = walk;
-    visual.legs[1].rotation.x = -walk;
-    visual.arms[0].rotation.x = -walk * 0.82;
-    visual.arms[1].rotation.x = walk * 0.82;
-    visual.arms[0].rotation.z = moving ? 0.08 : 0.72;
-    visual.arms[1].rotation.z = moving ? -0.08 : -0.72;
-    visual.group.visible =
-      body.position.distanceTo(this.sim.vehicle.body.position) <
-      (this.options.drawDistance ?? 270);
+    const healthy = person.outcome === "healthy",
+      speed = Math.hypot(body.velocity.x, body.velocity.z),
+      phase = this.elapsed + person.phase;
+    person.phase +=
+      healthy && person.activity === "walk"
+        ? Math.min(speed, 2.4) * dt * 5.4
+        : 0;
+    let legs = 0,
+      leftArm = 0.1,
+      rightArm = -0.1;
+    if (healthy && person.activity === "walk") {
+      legs = Math.sin(person.phase) * Math.min(0.48, speed * 0.31);
+      leftArm = -legs * 0.82;
+      rightArm = legs * 0.82;
+    } else if (healthy && person.activity === "chat") {
+      leftArm = 0.4 + Math.sin(phase * 1.3) * 0.2;
+      rightArm = 0.12 + Math.sin(phase * 0.8) * 0.15;
+    } else if (
+      healthy &&
+      (person.activity === "coffee" || person.activity === "dine")
+    ) {
+      leftArm = 1.05 + Math.pow(Math.max(0, Math.sin(phase * 0.75)), 3) * 1.0;
+      rightArm = person.activity === "dine" ? 0.78 : 0.1;
+    } else if (healthy && person.activity === "rest") {
+      leftArm = 0.35;
+      rightArm = 0.35;
+    }
+    if (person.alarmedUntil > this.elapsed) {
+      leftArm = 1.9 + Math.sin(phase * 2) * 0.15;
+      rightArm = 1.9 - Math.sin(phase * 2) * 0.15;
+    }
+    visual.legs[0].rotation.x = person.seated ? Math.PI / 2 : legs;
+    visual.legs[1].rotation.x = person.seated ? Math.PI / 2 : -legs;
+    visual.knees[0].rotation.x = visual.knees[1].rotation.x = person.seated
+      ? person.seatHeight < 0.2
+        ? -0.12
+        : -Math.PI / 2
+      : 0;
+    visual.arms[0].rotation.x = leftArm;
+    visual.arms[1].rotation.x = rightArm;
+    visual.arms[0].rotation.z = healthy ? 0.08 : 0.64;
+    visual.arms[1].rotation.z = healthy ? -0.08 : -0.64;
+    if (person.outcome === "fatal") {
+      visual.arms[0].rotation.x = 0.12;
+      visual.arms[1].rotation.x = -0.2;
+      visual.legs[0].rotation.x = 0.08;
+      visual.legs[1].rotation.x = -0.06;
+    }
+    this.batches.sync(visual, distance);
   }
-  // Call after sim.step(dt). Controller forces are queued after each fixed step.
   update(dt) {
+    this.visualElapsed += clamp(dt, 0, 0.1);
     for (const person of this.people)
       this.syncPerson(person, clamp(dt, 0, 0.1));
+    this.batches.finish();
+  }
+  reset() {
+    for (const person of this.people) {
+      this.sim.world.removeBody(person.body);
+      person.visual.group.removeFromParent();
+    }
+    this.people = [];
+    this.refreshPedestrianBodies();
+    this.events.length = 0;
+    this.elapsed = 0;
+    this.visualElapsed = 0;
+    this.nextId = 0;
+    this.random = seeded(this.options.seed ?? 7259);
+    this.batches.reset();
+    this.populate();
+    this.physicsStep(0);
+    this.update(0);
+    return this.people.length;
   }
   dispose() {
     this.sim.world.removeEventListener("postStep", this._postStep);
     this.sim.world.removeContactMaterial(this.contactMaterial);
+    this.sim.world.removeContactMaterial(this.personContactMaterial);
     for (const person of this.people) {
       this.sim.world.removeBody(person.body);
-      for (const m of person.visual.materials) m.dispose();
-      for (const g of person.visual.geometries) g.dispose();
+      person.visual.group.removeFromParent();
     }
     this.people.length = 0;
+    this.refreshPedestrianBodies();
+    this.batches.dispose();
     this.group.removeFromParent();
   }
 }

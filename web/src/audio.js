@@ -69,11 +69,50 @@ export class VehicleAudio {
     loop().connect(windFilter);
     windFilter.connect(this.windGain);
     this.windGain.connect(this.master);
+    this.sirenGain = ctx.createGain();
+    this.sirenGain.gain.value = 0;
+    const sirenFilter = ctx.createBiquadFilter();
+    sirenFilter.type = "lowpass";
+    sirenFilter.frequency.value = 1600;
+    this.sirenGain.connect(sirenFilter);
+    sirenFilter.connect(this.master);
+    this.sirens = [1, 1.008].map((detune) => {
+      const osc = ctx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = 650 * detune;
+      osc.connect(this.sirenGain);
+      osc.start();
+      return { osc, detune };
+    });
   }
-  update(sim, active) {
+  update(sim, active, pursuit) {
     if (!this.context) return;
     const t = this.context.currentTime,
       on = this.enabled && active;
+    const officers = pursuit?.officers || [];
+    const nearest = officers.reduce(
+      (d, officer) =>
+        Math.min(
+          d,
+          (officer.body || officer.record?.body)?.position.distanceTo(
+            sim.vehicle.body.position,
+          ) ?? Infinity,
+        ),
+      Infinity,
+    );
+    const chasing =
+      pursuit && pursuit.state !== "idle" && pursuit.state !== "busted";
+    this.sirenGain.gain.setTargetAtTime(
+      on && chasing ? Math.max(0, 1 - nearest / 180) * 0.16 : 0,
+      t,
+      0.18,
+    );
+    for (const { osc, detune } of this.sirens)
+      osc.frequency.setTargetAtTime(
+        (700 + Math.sin(sim.elapsed * 4.6) * 310) * detune,
+        t,
+        0.025,
+      );
     for (const { osc, order } of this.harmonics)
       osc.frequency.setTargetAtTime(
         Math.max(24, (sim.rpm / 60) * 2) * order,

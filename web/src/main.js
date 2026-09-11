@@ -14,6 +14,9 @@ import {
 } from "./ambient.js";
 import { VehicleAudio } from "./audio.js";
 import { DrivingEffects } from "./effects.js";
+import { PursuitSystem } from "./pursuit.js";
+import { DrivingSession, THEFT_RULES } from "./gameplay.js";
+import { createCityPlaces, createPlaceVisuals } from "./places.js";
 
 const $ = (id) => document.getElementById(id);
 const keys = new Set();
@@ -30,6 +33,9 @@ let sim,
   completed = 0,
   life,
   effects,
+  pursuit,
+  session,
+  districtPlaces,
   sound = false,
   drag = null;
 const map = $("minimap").getContext("2d");
@@ -72,6 +78,7 @@ function setWeather(name) {
 }
 function resetInput() {
   keys.clear();
+  session?.cancelTheft();
   for (const k of Object.keys(touch)) touch[k] = false;
   if (sim)
     Object.assign(sim.controls, {
@@ -209,7 +216,14 @@ function drawMap() {
     map.fillRect(cx + p[0] * s - 2, cy - p[1] * s - 2, 4, 4);
   }
   for (const car of sim.traffic) {
-    map.fillStyle = "#a4b9c2";
+    map.fillStyle =
+      car.role === "police"
+        ? session?.wanted && frame % 30 < 15
+          ? "#ff556d"
+          : "#63baff"
+        : car.parked
+          ? "#7b919a"
+          : "#c2d0d6";
     map.fillRect(
       cx + car.body.position.x * s - 1.5,
       cy + car.body.position.z * s - 1.5,
@@ -239,6 +253,7 @@ function updateHUD() {
   $("speed").textContent = Math.round(sim.speedKph);
   $("gear").textContent = sim.speedKph < 1 ? "N" : sim.gear;
   $("rpm").style.width = `${Math.min(100, sim.rpm / 65)}%`;
+  $("vehicle-name").textContent = sim.vehicle.profile?.name || "MERIDIAN GT";
   $("condition").textContent =
     `${Math.round(sim.vehicle.health * 100)}% CONDITION`;
   $("surface").textContent = sim.airborne
@@ -327,13 +342,99 @@ function updateBeacon() {
       -job.destination[1],
     );
 }
+function updateGameplayUI() {
+  const wanted = session.wanted;
+  document.body.classList.toggle("wanted", wanted);
+  $("wanted").hidden = !wanted || session.busted;
+  const search = pursuit.state === "search";
+  $("wanted").classList.toggle("search", search);
+  $("wanted-label").textContent = search ? "SEARCHING" : "WANTED";
+  $("wanted-stars").textContent = "★".repeat(
+    Math.max(1, Math.min(3, pursuit.severity || 1)),
+  );
+  const remaining = Math.max(0, 60 - (pursuit.unseenSeconds || 0));
+  const capture = pursuit.captureProgress || 0;
+  $("pursuit-title").textContent =
+    capture > 0
+      ? "Police are closing in"
+      : search
+        ? "Stay out of sight"
+        : "Police are pursuing you";
+  $("pursuit-detail").textContent =
+    capture > 0
+      ? "Drive away before you are arrested."
+      : search
+        ? `${Math.ceil(remaining)} seconds to lose the police.`
+        : "Break their line of sight, then stay hidden for 60 seconds.";
+  $("pursuit-progress").style.width =
+    `${Math.min(100, (capture > 0 ? capture : search ? (60 - remaining) / 60 : 0) * 100)}%`;
+  const candidate = session.candidate;
+  $("theft").hidden = !candidate || session.busted;
+  if (candidate)
+    $("theft-label").textContent =
+      `Hold to steal ${candidate.profile?.name || "car"} · ${Math.round(candidate.health * 100)}%`;
+  $("theft-progress").style.width =
+    `${Math.min(100, (session.theftSeconds / THEFT_RULES.holdSeconds) * 100)}%`;
+  for (const event of session.events.splice(0)) {
+    if (event.type === "incident")
+      toast(
+        event.outcome === "fatal"
+          ? "Fatal collision reported. Police are responding."
+          : "Pedestrian injured. Police are responding.",
+        5500,
+      );
+    if (event.type === "stolen") {
+      resetInput();
+      toast(
+        `${event.record.profile?.name || "Car"} stolen. Police have been alerted.`,
+        4500,
+      );
+    }
+    if (event.type === "escaped")
+      toast("You lost the police. Keep a low profile.", 5000);
+    if (event.type === "busted") {
+      resetInput();
+      $("busted").hidden = false;
+      document.body.classList.add("busted");
+      $("restart").focus();
+    }
+  }
+}
+function restartDrive() {
+  if (!session?.busted) return;
+  session.restart();
+  resetInput();
+  job = null;
+  completed = 0;
+  paused = false;
+  photo = false;
+  view.setPhoto(false);
+  document.body.classList.remove("busted", "paused", "wanted", "photo");
+  $("busted").hidden = true;
+  $("photo-ui").hidden = true;
+  $("mission-title").textContent = "Find your way through the hills.";
+  $("mission-detail").textContent = "Free roam through the city.";
+  $("job").innerHTML = "Start a delivery <span>↗</span>";
+  toast("A fresh start. Drive carefully.", 4000);
+}
+$("restart").addEventListener("click", restartDrive);
+$("steal").addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  event.currentTarget.setPointerCapture(event.pointerId);
+  touch.steal = true;
+});
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+  $("steal").addEventListener(type, () => {
+    touch.steal = false;
+  });
+
 function tick(now) {
   requestAnimationFrame(tick);
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   if (!sim || !view) return;
   frame++;
-  if (playing && !paused && !photo) {
+  if (playing && !paused && !photo && !session?.busted) {
     let forward = keys.has("KeyW") || keys.has("ArrowUp") || touch.throttle,
       back = keys.has("KeyS") || keys.has("ArrowDown") || touch.brake;
     const left = keys.has("KeyA") || keys.has("ArrowLeft") || touch.left,
@@ -347,16 +448,22 @@ function tick(now) {
     sim.controls.brake = back && sim.signedSpeedKph >= 1 ? 1 : 0;
     sim.controls.handbrake = keys.has("Space");
     sim.step(dt);
+    session.update(dt, { stealHeld: keys.has("KeyE") || touch.steal });
   } else if (!playing && frame < 120) {
     sim.controls.brake = 1;
     sim.step(dt);
   }
-  life?.update(paused || photo ? 0 : dt);
-  effects?.update(sim, dt, paused || photo);
+  life?.update(paused || photo || session?.busted ? 0 : dt);
+  effects?.update(sim, dt, paused || photo || session?.busted);
   view.update(sim, dt, playing);
   if (frame % 5 === 0) updateHUD();
+  if (playing) updateGameplayUI();
   if (frame % 10 === 0) updateBeacon();
-  vehicleAudio.update(sim, playing && !paused && !photo);
+  vehicleAudio.update(
+    sim,
+    playing && !paused && !photo && !session?.busted,
+    pursuit,
+  );
 }
 
 async function boot() {
@@ -383,10 +490,17 @@ async function boot() {
     )
       throw new Error("City package is invalid.");
     $("play").textContent = "Preparing streets and traffic…";
-    sim = new CitySimulation(city, { trafficCount: 18 });
+    sim = new CitySimulation(city, {
+      trafficCount: 40,
+      policeCount: 4,
+      parkedCount: 16,
+    });
     const groundAt = sim.sampleElevation.bind(sim);
     const objects = createStreetLayout(city, groundAt);
-    sim.addObstacles(objects);
+    districtPlaces = createCityPlaces(city, groundAt, {
+      streetObjects: objects,
+    });
+    sim.addObstacles([...objects, ...districtPlaces.obstacles]);
     const streetVisuals = createStreetVisuals(objects, { maxLights: 6 });
     const renderCity = {
       ...city,
@@ -401,12 +515,16 @@ async function boot() {
     });
     $("play").textContent = "Loading detailed car…";
     await view.loadVehicles();
+    const placesVisuals = createPlaceVisuals(districtPlaces.places);
+    view.scene.add(placesVisuals);
     life = new AmbientLife(city, sim, view.scene, {
-      objects,
-      count: 42,
-      radius: 230,
+      objects: [...objects, ...districtPlaces.obstacles],
+      count: 150,
+      activitySpots: districtPlaces.activitySpots,
     });
     sim.pedestrianBodies = life.people.map((p) => p.body);
+    pursuit = new PursuitSystem(sim, city);
+    session = new DrivingSession(sim, life, pursuit);
     effects = new DrivingEffects(view.scene);
     view.effects = effects;
     const p = sim.vehicle.body.position;
@@ -430,7 +548,10 @@ $("play").addEventListener("click", () => {
   document.body.classList.add("playing");
   $("start").hidden = true;
   $("start").style.display = "none";
-  toast("WASD to drive · C to change camera · R to recover", 6000);
+  toast(
+    "WASD to drive · Hold E near a slow car to steal it · C for camera",
+    7000,
+  );
 });
 $("help").addEventListener("click", () => {
   $("info").showModal();
@@ -456,6 +577,10 @@ $("capture").addEventListener("click", () => {
   view.screenshot();
 });
 window.addEventListener("keydown", (e) => {
+  if (session?.busted) {
+    if (e.code === "Enter") restartDrive();
+    return;
+  }
   if (!playing || $("info").open) return;
   if (
     ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(
@@ -482,6 +607,10 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyC") changeCamera();
   if (e.code === "KeyH") vehicleAudio.horn();
   if (e.code === "KeyR") {
+    if (session?.wanted) {
+      toast("Recovery is unavailable while the police are looking for you.");
+      return;
+    }
     sim.reset();
     toast("Back on the road. Car repaired.");
     if (paused) setPaused(false);

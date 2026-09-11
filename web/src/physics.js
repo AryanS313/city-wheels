@@ -259,6 +259,65 @@ class LoadLimitedVehicle extends CANNON.RaycastVehicle {
   }
 }
 
+export const VEHICLE_PROFILES = Object.freeze([
+  {
+    name: "Commuter",
+    color: "#8ca5b9",
+    powerMultiplier: 0.78,
+    mass: 1320,
+    gripMultiplier: 0.95,
+    style: "compact",
+  },
+  {
+    name: "Bay Cruiser",
+    color: "#d0b880",
+    powerMultiplier: 0.98,
+    mass: 1530,
+    gripMultiplier: 1,
+    style: "sedan",
+  },
+  {
+    name: "Apex GT",
+    color: "#ba3929",
+    powerMultiplier: 1.3,
+    mass: 1390,
+    gripMultiplier: 1.08,
+    style: "sport",
+  },
+  {
+    name: "Pacific V8",
+    color: "#353e56",
+    powerMultiplier: 1.16,
+    mass: 1680,
+    gripMultiplier: 0.97,
+    style: "muscle",
+  },
+  {
+    name: "Sunset Classic",
+    color: "#629f91",
+    powerMultiplier: 0.88,
+    mass: 1450,
+    gripMultiplier: 0.98,
+    style: "classic",
+  },
+  {
+    name: "Night Runner",
+    color: "#e8e3d9",
+    powerMultiplier: 1.2,
+    mass: 1410,
+    gripMultiplier: 1.04,
+    style: "coupe",
+  },
+]);
+const POLICE_PROFILE = {
+  name: "SFPD Interceptor",
+  color: "#e9e9e6",
+  powerMultiplier: 1.24,
+  mass: 1550,
+  gripMultiplier: 1.06,
+  style: "police",
+};
+
 export class CitySimulation {
   constructor(city, options = {}) {
     this.city = city;
@@ -291,7 +350,10 @@ export class CitySimulation {
     this.vehicle = this.#createVehicle(this.#getSpawn());
     this.traffic = [];
     this.trafficNetwork = new TrafficNetwork(city);
-    this.#buildTraffic(options.trafficCount ?? 18);
+    this.#buildTraffic(options.trafficCount ?? 40, options.policeCount ?? 4);
+    this.#buildParked(options.parkedCount ?? 0);
+    this.allVehicles = [this.vehicle, ...this.traffic];
+    this.pursuit = null;
   }
   get speedKph() {
     return this.vehicle.body.velocity.length() * 3.6;
@@ -558,9 +620,19 @@ export class CitySimulation {
       this.obstacles.push({ ...obstacle, body, shape });
     }
   }
-  #createVehicle(spawn, traffic = false) {
+  #createVehicle(spawn, traffic = false, profile = null) {
+    profile = {
+      ...(profile || {
+        name: "City Wheels GT",
+        color: "#a93822",
+        powerMultiplier: 1,
+        mass: 1450,
+        gripMultiplier: 1,
+        style: "sport",
+      }),
+    };
     const body = new CANNON.Body({
-      mass: VEHICLE_SPEC.mass,
+      mass: profile.mass,
       linearDamping: 0.005,
       angularDamping: 0.34,
       allowSleep: false,
@@ -608,6 +680,11 @@ export class CitySimulation {
     raycast.addToWorld(this.world);
     const record = {
       body,
+      profile,
+      tuning: { power: 1, grip: 1, brakes: 1 },
+      role: profile.style === "police" ? "police" : "civilian",
+      parked: false,
+      abandoned: false,
       raycast,
       wheels: raycast.wheelInfos,
       health: 1,
@@ -624,6 +701,8 @@ export class CitySimulation {
       lastImpactTime: -100,
     };
     body.isVehicle = true;
+    record.id = body.vehicleId = `vehicle-${body.id}`;
+    body.vehicleRecord = record;
     body.addEventListener("collide", (event) => {
       const contact = event.contact,
         impact = Math.abs(contact.getImpactVelocityAlongNormal());
@@ -667,7 +746,8 @@ export class CitySimulation {
       this.events.push({
         type: "collision",
         vehicleId: body.id,
-        player: !traffic,
+        player: record === this.vehicle,
+        vehicleKey: record.id,
         otherId: other.id,
         obstacleId: (ownIsI ? contact.sj : contact.si)?.obstacleId,
         impact,
@@ -698,8 +778,51 @@ export class CitySimulation {
     record.body.aabbNeedsUpdate = true;
     for (let i = 0; i < 4; i++) record.raycast.updateWheelTransform(i);
   }
-  reset() {
-    this.#placeVehicle(this.vehicle, this.#getSpawn());
+  reset(options = {}) {
+    if (
+      this.pursuit &&
+      ["pursuit", "search"].includes(this.pursuit.state) &&
+      !options.force
+    )
+      return false;
+    this.pursuit?.reset();
+    let spawn = this.#getSpawn();
+    const blocked = (p) =>
+      this.traffic.some(
+        (car) =>
+          Math.hypot(car.body.position.x - p.x, -car.body.position.z - p.y) <
+          5.8,
+      );
+    if (blocked(spawn)) {
+      const forward = {
+        x: Math.sin(spawn.headingRadians),
+        y: Math.cos(spawn.headingRadians),
+      };
+      for (const offset of [-9, 9, -18, 18, -30, 30, -45, 45]) {
+        const road = nearestRoad(
+          this.segments,
+          spawn.x + forward.x * offset,
+          spawn.y + forward.y * offset,
+          16,
+        );
+        if (!road) continue;
+        const direction =
+          road.dx * forward.x + road.dy * forward.y >= 0 ? 1 : -1;
+        const dx = (road.dx / road.length) * direction,
+          dy = (road.dy / road.length) * direction;
+        const candidate = {
+          x: road.x + dy * 1.15,
+          y: road.y - dx * 1.15,
+          z: road.elevation,
+          headingRadians: Math.atan2(dx, dy),
+        };
+        if (!blocked(candidate)) {
+          spawn = candidate;
+          break;
+        }
+      }
+    }
+    this.#placeVehicle(this.vehicle, spawn);
     this.vehicle.health = this.vehicle.engineHealth = 1;
     this.vehicle.damage = { front: 0, rear: 0, left: 0, right: 0 };
     this.vehicle.steeringDamage = this.vehicle.steeringAngle = 0;
@@ -707,16 +830,114 @@ export class CitySimulation {
     this.controls.handbrake = false;
     this.gear = this.vehicle.gear = 1;
     this.rpm = this.vehicle.rpm = 850;
+    return true;
   }
-  #buildTraffic(count) {
-    for (const candidate of this.trafficNetwork.spawnCandidates(
+  #buildTraffic(count, policeCount) {
+    const candidates = this.trafficNetwork.spawnCandidates(
       this.vehicle.body.position,
       count,
-    )) {
-      const record = this.#createVehicle(candidate.spawn, true);
+    );
+    const policeIndices = new Set(
+      Array.from({ length: Math.min(policeCount, candidates.length) }, (_, i) =>
+        Math.floor(
+          (i * candidates.length) / Math.min(policeCount, candidates.length),
+        ),
+      ),
+    );
+    for (const [index, candidate] of candidates.entries()) {
+      const profile = policeIndices.has(index)
+        ? POLICE_PROFILE
+        : VEHICLE_PROFILES[index % VEHICLE_PROFILES.length];
+      const record = this.#createVehicle(candidate.spawn, true, profile);
       this.trafficNetwork.attach(record, candidate.routeState);
       this.traffic.push(record);
     }
+  }
+  #buildParked(count) {
+    let added = 0;
+    for (const candidate of this.trafficNetwork.parkedCandidates(
+      this.vehicle.body.position,
+      count,
+      this.traffic,
+    )) {
+      const record = this.#createVehicle(
+        candidate.spawn,
+        true,
+        VEHICLE_PROFILES[(added + 2) % VEHICLE_PROFILES.length],
+      );
+      record.parked = true;
+      record.controls.brake = 1;
+      this.traffic.push(record);
+      added++;
+    }
+  }
+  canTakeVehicle(target) {
+    const record =
+      typeof target === "object"
+        ? target
+        : this.allVehicles.find((v) => v.id === target || v.body.id === target);
+    if (!record || record === this.vehicle || !this.traffic.includes(record))
+      return { ok: false, reason: "Choose another vehicle" };
+    if (this.pursuit?.state === "busted")
+      return { ok: false, reason: "Restart after being busted" };
+    const distance = this.vehicle.body.position.distanceTo(
+      record.body.position,
+    );
+    if (distance > 7)
+      return { ok: false, reason: "Get within7metres", distance };
+    const speed =
+      Math.max(
+        this.vehicle.body.velocity.length(),
+        record.body.velocity.length(),
+      ) * 3.6;
+    const relativeSpeed =
+      this.vehicle.body.velocity.vsub(record.body.velocity).length() * 3.6;
+    if (speed > 12 || relativeSpeed > 12)
+      return {
+        ok: false,
+        reason: "Slow both cars below12km/h",
+        distance,
+        speed,
+      };
+    return { ok: true, vehicle: record, distance, speed };
+  }
+  takeVehicle(target) {
+    const check = this.canTakeVehicle(target);
+    if (!check.ok) return check;
+    const previous = this.vehicle,
+      record = check.vehicle,
+      index = this.traffic.indexOf(record);
+    // Exchange ownership only. The solver keeps both original bodies, transforms,
+    // momentum, damage, profiles and tuning; no theft teleport or repair occurs.
+    this.traffic[index] = previous;
+    this.vehicle = record;
+    previous.traffic = true;
+    previous.parked = true;
+    previous.abandoned = true;
+    previous.chaseTarget = null;
+    previous.controls = { throttle: 0, steer: 0, brake: 0.9, handbrake: false };
+    record.traffic = false;
+    record.parked = false;
+    record.abandoned = false;
+    record.chaseTarget = null;
+    record.controls = { throttle: 0, steer: 0, brake: 0, handbrake: false };
+    Object.assign(this.controls, {
+      throttle: 0,
+      steer: 0,
+      brake: 0,
+      handbrake: false,
+    });
+    this.gear = record.gear;
+    this.rpm = record.rpm;
+    if (this.pursuit) this.pursuit.nextSightAt = 0;
+    this.events.push({
+      type: "vehicle-taken",
+      vehicleId: record.body.id,
+      previousVehicleId: previous.body.id,
+      player: true,
+      time: this.elapsed,
+    });
+    return { ok: true, vehicle: record, previous };
   }
   #drive(record, controls, dt) {
     const body = record.body,
@@ -755,7 +976,11 @@ export class CitySimulation {
       850,
       6800,
     );
-    const torque = this.#torqueAt(record.rpm) * record.engineHealth;
+    const torque =
+      this.#torqueAt(record.rpm) *
+      record.engineHealth *
+      record.profile.powerMultiplier *
+      (record.tuning.power || 1);
     const engineForce =
       ((torque * ratio * VEHICLE_SPEC.finalDrive * 0.87) /
         VEHICLE_SPEC.wheelRadius) *
@@ -783,7 +1008,10 @@ export class CitySimulation {
         : baseSurface;
       w.contactSurface = surface;
       let grip =
-        surfaceGrip(surface, this.wetness) * lerp(0.76, 1, record.health);
+        surfaceGrip(surface, this.wetness) *
+        lerp(0.76, 1, record.health) *
+        record.profile.gripMultiplier *
+        (record.tuning.grip || 1);
       // Progressive lateral grip falloff approximates a street tyre beyond peak slip.
       const localVelocity = body.vectorToLocalFrame(body.velocity);
       const slipAngle = Math.abs(
@@ -797,7 +1025,10 @@ export class CitySimulation {
       const wheelBrakeForce =
         brake * (i < 2 ? 5500 : 3800) +
         (controls.handbrake && i > 1 ? 7500 : 0);
-      record.raycast.setBrake(wheelBrakeForce * dt, i);
+      record.raycast.setBrake(
+        wheelBrakeForce * dt * (record.tuning.brakes || 1),
+        i,
+      );
     }
     // Air resistance and rolling resistance act on the rigid body, never by position edits.
     const v = body.velocity.length();
@@ -813,8 +1044,8 @@ export class CitySimulation {
     }
     if (record.raycast.numWheelsOnGround > 0 && speed > 0.08) {
       const rolling = Math.min(
-        VEHICLE_SPEC.mass * 9.81 * 0.012,
-        (speed * VEHICLE_SPEC.mass) / dt,
+        body.mass * 9.81 * 0.012,
+        (speed * body.mass) / dt,
       );
       body.applyForce(forward.scale(-Math.sign(longitudinal) * rolling));
     }
@@ -848,9 +1079,24 @@ export class CitySimulation {
     let steps = 0;
     while (this.accumulator >= FIXED_STEP && steps++ < 6) {
       this.elapsed += FIXED_STEP;
+      this.pursuit?.update(FIXED_STEP);
+      if (this.pursuit?.state === "busted")
+        Object.assign(this.controls, {
+          throttle: 0,
+          steer: 0,
+          brake: 1,
+          handbrake: true,
+        });
       this.#drive(this.vehicle, this.controls, FIXED_STEP);
       for (const car of this.traffic) {
-        this.trafficNetwork.update(car, this, FIXED_STEP);
+        if (car.parked || car.policeHold)
+          Object.assign(car.controls, {
+            throttle: 0,
+            steer: 0,
+            brake: 1,
+            handbrake: false,
+          });
+        else this.trafficNetwork.update(car, this, FIXED_STEP);
         this.#drive(car, car.controls, FIXED_STEP);
       }
       this.world.step(FIXED_STEP);

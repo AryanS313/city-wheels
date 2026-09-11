@@ -4,14 +4,15 @@
 
 Drive a real **1 km × 1 km** slice of Russian Hill, San Francisco, including crooked Lombard Street and steep Filbert Street. This repository contains a UE5 C++ starter, a reproducible OpenStreetMap/USGS import pipeline, and a public playable browser companion.
 
-**Status (v0.2):** the browser prototype is playable with a detailed licensed car, 18 dynamic traffic vehicles, 42 walking pedestrians and solid roadside furniture. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
+**Status (v0.3):** the browser prototype has a detailed licensed car, 40 moving vehicles (including four police patrols), 16 parked cars, 150 residents, business scenery, police pursuit and car theft. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
 
 ## Play
 
 Open **https://aryans313.github.io/city-wheels/** on a desktop browser and select **Take the wheel**. Touch driving controls are available on touch devices.
 
 - **WASD / arrows:** drive; S brakes before reversing.
-- **Space:** handbrake. **R:** recover to the road and repair.
+- **Space:** handbrake. **R:** recover to the road and repair when not wanted.
+- **Hold E:** steal a nearby slow or parked car; both cars must be within 7 m and below 12 km/h. A touch interaction button appears when a target is in reach.
 - **C:** chase, cockpit and cinematic cameras. **H:** horn. Engine, skid and impact audio starts when you play; toggle sound in the top bar.
 - **P:** photo mode; drag to orbit, scroll to zoom, save a screenshot.
 - **Esc:** pause/resume. Press a driving key or click the scene to resume after switching tabs.
@@ -20,9 +21,17 @@ Open **https://aryans313.github.io/city-wheels/** on a desktop browser and selec
 
 The browser car uses a 1,450 kg rigid body, four suspension contacts, engine torque/gearing and surface-dependent grip. The detailed CC BY 4.0 CarConcept body includes an interior, separate wheels and PBR materials. Impacts transfer momentum, deform local panels, add scratches and crack the windshield. Major front damage reduces power; small scrapes preserve driveability. Recovery repairs the car.
 
-18 traffic cars use the same physics, follow connected directed road routes and brake for cars/pedestrians. 42 articulated adults walk using physical forces and can topple in collisions. The 792 generated trees, lamps and bollards share their placement with solid colliders. Buildings retain their concave openings and courtyards. One continuous road-conforming heightfield removes the previous overlapping road-box faces that caused abrupt stops.
+The fleet covers the district with 40 moving cars, including four police units, plus 16 physical parked cars. Car profiles have different mass, power and grip; taking a car preserves its existing condition and tune. All vehicles currently share the same licensed body geometry with different paint and police details.
 
-Traffic is still a prototype: full signal phases, lane merging and complex traffic-law compliance are unfinished. Pedestrians are stylized, with rigid-body toppling rather than skeletal ragdolls; they currently follow sidewalks. Furniture stays anchored. These are improvements to a browser prototype, not a GTA-level city or soft-body crash simulator.
+150 residents occupy all 25 sections of the playable 1 km² district. People walk, chat, drink coffee, dine outside and rest with personal belongings. The 38 decorated venues include nine cafés, ten restaurants, nine hotels and ten homes, plus five quiet rest pockets. Existing OSM-tagged names are distinguished from fictional scenery; doors, menus, seating and residents are game additions rather than a current business directory.
+
+The 792 trees, lamps and bollards and 126 business/rest fixtures share placement with solid colliders. Buildings retain concave openings and courtyards. The continuous road-conforming heightfield avoids the previous overlapping road-box faces that caused abrupt stops.
+
+Minor pedestrian impacts can cause a recoverable stumble. More severe impacts can leave a person injured or dead, with persistent non-graphic outcomes until restart. These are fictional game rules, not a medical injury model. Everyone uses the same collision rules.
+
+Player-caused serious injury, a fatal collision, or car theft alerts the police. Patrol cars pursue with physical steering, engine and brake forces. Hide from their line of sight for **60 continuous seconds** to clear the wanted level; being spotted resets the timer. Remaining within 6.5 m of a seeing officer at low speed for three seconds leads to **BUSTED** and a **Start again** button (Enter also restarts). Recovery cannot clear an active pursuit.
+
+Traffic is still a prototype: full signal phases, lane merging and complex traffic-law compliance are unfinished. Pedestrians are stylized, with rigid-body toppling rather than skeletal ragdolls; they follow sidewalks and activity anchors. Theft is a nearby vehicle takeover with an exited-driver reaction, without an on-foot player mode or animated door entry. Furniture stays anchored. This remains a browser prototype, not a GTA-level city or soft-body crash simulator.
 
 ## Real city data
 
@@ -53,7 +62,7 @@ Publish the browser build with `scripts/publish-pages.sh`. GitHub Pages serves t
 
 ## Scope still to build
 
-Working mirrors, multiple authored car classes, photorealistic facade and character kits, Nanite baking, landmark models, full signal/merge traffic, pedestrian road crossings, cyclists/cable cars/animals, taxi/race/getaway mission systems, branching story and garage economy are future milestones. [The roadmap](docs/roadmap.md) defines those stages and their acceptance gates.
+Working mirrors, on-foot movement, animated car entry, multiple authored car classes, photorealistic facade and character kits, Nanite baking, landmark models, full signal/merge traffic, pedestrian road crossings, cyclists/cable cars/animals, taxi/race/getaway mission systems, branching story and garage economy are future milestones. [The roadmap](docs/roadmap.md) defines those stages and their acceptance gates.
 
 ## Attribution
 

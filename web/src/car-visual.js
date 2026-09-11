@@ -253,8 +253,67 @@ function lineTexture(cracks = false) {
 }
 let scratchesTexture, cracksTexture;
 
+// Preserve the real body silhouette in distant traffic with a shared vertex
+// clustering LOD. Near cars and the player's interior always use source detail.
+function trafficGeometry(source) {
+  const p = source.attributes.position,
+    bins = new Map(),
+    remap = new Uint32Array(p.count),
+    vertices = [],
+    uvs = [];
+  const uv = source.attributes.uv,
+    step = 0.055;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i),
+      y = p.getY(i),
+      z = p.getZ(i);
+    const key = `${Math.round(x / step)},${Math.round(y / step)},${Math.round(z / step)}`;
+    let b = bins.get(key);
+    if (!b) {
+      b = { index: bins.size, x: 0, y: 0, z: 0, u: 0, v: 0, n: 0 };
+      bins.set(key, b);
+    }
+    b.x += x;
+    b.y += y;
+    b.z += z;
+    b.u += uv?.getX(i) || 0;
+    b.v += uv?.getY(i) || 0;
+    b.n++;
+    remap[i] = b.index;
+  }
+  for (const b of bins.values()) {
+    vertices.push(b.x / b.n, b.y / b.n, b.z / b.n);
+    uvs.push(b.u / b.n, b.v / b.n);
+  }
+  const indices = [],
+    index = source.index,
+    count = index?.count ?? p.count;
+  for (let i = 0; i < count; i += 3) {
+    const a = remap[index ? index.getX(i) : i],
+      b = remap[index ? index.getX(i + 1) : i + 1],
+      c = remap[index ? index.getX(i + 2) : i + 2];
+    if (a !== b && b !== c && a !== c) indices.push(a, b, c);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(vertices, 3),
+  );
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setAttribute("uv1", geometry.attributes.uv.clone());
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 /** Returned wheels are WORLD-space siblings: add root and ...wheels to your scene. */
-export function createCarVisual(color = "#ae4228", player = true) {
+export function createCarVisual(
+  color = "#ae4228",
+  player = true,
+  options = {},
+) {
   if (!template)
     throw new Error("Await loadCarAsset() before creating the detailed car.");
   const root = new THREE.Group();
@@ -306,7 +365,10 @@ export function createCarVisual(color = "#ae4228", player = true) {
       if (/Headlight/.test(material.name)) headMaterials.push(material);
       if (!player && material.transmission) material.transmission = 0;
     }
-    const geometry = item.geometry;
+    const geometry =
+      options.detail === "medium" && !player
+        ? (item.trafficGeometry ??= trafficGeometry(item.geometry))
+        : item.geometry;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = item.names.join("+");
     mesh.castShadow = true;
@@ -337,7 +399,7 @@ export function createCarVisual(color = "#ae4228", player = true) {
     );
   }
   steering.position.copy(steeringCenter);
-  if (template.windshield) {
+  if (template.windshield && player) {
     const geometry = template.windshield.clone();
     geometry.computeBoundingBox();
     const bounds = geometry.boundingBox,
@@ -401,10 +463,16 @@ export function createCarVisual(color = "#ae4228", player = true) {
     decals: [],
     player,
   };
+  visual.detail = options.detail || "full";
   visual.dispose = () => {
     root.removeFromParent();
     wheels.forEach((w) => w.removeFromParent());
     for (const m of materials.values()) m.dispose();
+    for (const mesh of steering.children) mesh.geometry.dispose();
+    if (windshieldMesh) {
+      windshieldMesh.geometry.dispose();
+      windshieldMesh.material.dispose();
+    }
     deformMeshes.forEach((d) => {
       if (d.unique) d.mesh.geometry.dispose();
     });
