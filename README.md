@@ -4,7 +4,7 @@
 
 Drive a real **1 km × 1 km** slice of Russian Hill, San Francisco, including crooked Lombard Street and steep Filbert Street. This repository contains a UE5 C++ starter, a reproducible OpenStreetMap/USGS import pipeline, and a public playable browser companion.
 
-**Status:** the browser prototype is playable. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
+**Status (v0.2):** the browser prototype is playable with a detailed licensed car, 18 dynamic traffic vehicles, 42 walking pedestrians and solid roadside furniture. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
 
 ## Play
 
@@ -12,13 +12,17 @@ Open **https://aryans313.github.io/city-wheels/** on a desktop browser and selec
 
 - **WASD / arrows:** drive; S brakes before reversing.
 - **Space:** handbrake. **R:** recover to the road and repair.
-- **C:** chase, cockpit and cinematic cameras.
+- **C:** chase, cockpit and cinematic cameras. **H:** horn. Engine, skid and impact audio starts when you play; toggle sound in the top bar.
 - **P:** photo mode; drag to orbit, scroll to zoom, save a screenshot.
-- **Esc:** pause/resume. Click the scene to resume after switching tabs.
+- **Esc:** pause/resume. Press a driving key or click the scene to resume after switching tabs.
 - Use the weather controls for daylight, bay fog, rain and night.
 - Select **Start a delivery**, follow the amber marker on the minimap, and stop nearby.
 
-The browser car uses a 1,450 kg rigid body, four suspension contacts, engine torque/gearing, surface-dependent grip and collision damage. Traffic cars use the same physics and proximity braking; intersection routing and signal timing are still pending. Car and building art are procedural prototypes. Recovery repairs the car so you can keep exploring.
+The browser car uses a 1,450 kg rigid body, four suspension contacts, engine torque/gearing and surface-dependent grip. The detailed CC BY 4.0 CarConcept body includes an interior, separate wheels and PBR materials. Impacts transfer momentum, deform local panels, add scratches and crack the windshield. Major front damage reduces power; small scrapes preserve driveability. Recovery repairs the car.
+
+18 traffic cars use the same physics, follow connected directed road routes and brake for cars/pedestrians. 42 articulated adults walk using physical forces and can topple in collisions. The 792 generated trees, lamps and bollards share their placement with solid colliders. Buildings retain their concave openings and courtyards. One continuous road-conforming heightfield removes the previous overlapping road-box faces that caused abrupt stops.
+
+Traffic is still a prototype: full signal phases, lane merging and complex traffic-law compliance are unfinished. Pedestrians are stylized, with rigid-body toppling rather than skeletal ragdolls; they currently follow sidewalks. Furniture stays anchored. These are improvements to a browser prototype, not a GTA-level city or soft-body crash simulator.
 
 ## Real city data
 
@@ -49,8 +53,8 @@ Publish the browser build with `scripts/publish-pages.sh`. GitHub Pages serves t
 
 ## Scope still to build
 
-Detailed licensed vehicle/interior assets, working mirrors, photorealistic facade kits, Nanite baking, landmark models, full signal/merge traffic, pedestrians/cyclists/cable cars/animals, taxi/race/getaway mission systems, branching story and garage economy are future milestones. [The roadmap](docs/roadmap.md) defines those stages and their acceptance gates.
+Working mirrors, multiple authored car classes, photorealistic facade and character kits, Nanite baking, landmark models, full signal/merge traffic, pedestrian road crossings, cyclists/cable cars/animals, taxi/race/getaway mission systems, branching story and garage economy are future milestones. [The roadmap](docs/roadmap.md) defines those stages and their acceptance gates.
 
 ## Attribution
 
-© [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), ODbL. Elevation from [USGS 3DEP](https://www.usgs.gov/3d-elevation-program). Original code is MIT; geographic data is separately licensed. See [NOTICE](NOTICE) and [LICENSE](LICENSE).
+© [OpenStreetMap contributors](https://www.openstreetmap.org/copyright), ODbL. Elevation from [USGS 3DEP](https://www.usgs.gov/3d-elevation-program). Original code is MIT; geographic data is separately licensed. Vehicle model: CarConcept by Eric Chadwick / Darmstadt Graphics Group, CC BY 4.0, adapted; see [asset credits](web/public/assets/car/ATTRIBUTION.md). See [NOTICE](NOTICE) and [LICENSE](LICENSE).

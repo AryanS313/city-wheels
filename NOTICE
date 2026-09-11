@@ -21,4 +21,9 @@ Dependency packages retain their included license notices.
 
 Unreal Engine is a trademark of Epic Games, Inc. The Engine is not redistributed.
 This independent project is not affiliated with Epic Games or the City of San Francisco.
-The Meridian GT car model and gameplay are original prototype assets.
+CarConcept model: Eric Chadwick / Darmstadt Graphics Group, via Khronos Group.
+https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept
+Licensed CC BY 4.0. Adapted orientation, dimensions, wheel alignment, paint and damage.
+Source, attribution and full license: web/public/assets/car/.
+The fictional Meridian GT name and vehicle tuning are original gameplay content.
+Earcut (ISC) is used for footprint triangulation.

@@ -1,0 +1,23 @@
+{
+  "asset": "Car Concept",
+  "author": "Eric Chadwick",
+  "copyright": "2024 Darmstadt Graphics Group GmbH",
+  "license": "CC-BY-4.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+  "officialSource": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept",
+  "downloadUrl": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CarConcept/glTF-Binary/CarConcept.glb",
+  "downloadedAtUtc": "2026-09-11T19:14:47.386337+00:00",
+  "bytes": 11778688,
+  "sha256": "c272098089d78c5cd9fd9f24ff50ee8acf8d932c55f2d55fc10adb6c8998966b",
+  "embeddedImages": 14,
+  "requiresDraco": false,
+  "licenseEvidence": "Official README Legal section and embedded glTF asset.copyright both explicitly identify CC BY 4.0.",
+  "adaptations": [
+    "Coordinate and unit normalization at runtime",
+    "Merged geometry groups",
+    "Animated wheel parts",
+    "Independent recolorable PBR materials",
+    "Localized dents/scratches/windshield cracks",
+    "License-plate and steering-emblem objects omitted from rendering"
+  ]
+}

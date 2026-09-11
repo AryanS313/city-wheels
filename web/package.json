@@ -1,1 +1,21 @@
-{"name":"city-wheels-browser","version":"0.1.0","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"node ../scripts/stage-city.mjs && vite build","test":"node --test test/*.test.js"},"dependencies":{"@fontsource/barlow-condensed":"^5.2.6","@fontsource/dm-sans":"^5.2.6","cannon-es":"0.20.0","three":"0.180.0"},"devDependencies":{"vite":"6.3.6"}}
+{
+  "name": "city-wheels-browser",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "node ../scripts/stage-city.mjs && vite build",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@fontsource/barlow-condensed": "^5.2.6",
+    "@fontsource/dm-sans": "^5.2.6",
+    "cannon-es": "0.20.0",
+    "earcut": "^3.0.2",
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "vite": "6.3.6"
+  }
+}
