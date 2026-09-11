@@ -13,6 +13,7 @@ cp LICENSE NOTICE "$PUBLISH_DIR/"
 touch "$PUBLISH_DIR/.nojekyll"
 REMOTE_URL="$(git remote get-url origin)"
 git -C "$PUBLISH_DIR" init -b gh-pages
+git -C "$PUBLISH_DIR" config credential.https://github.com.helper '!gh auth git-credential'
 git -C "$PUBLISH_DIR" add .
 git -C "$PUBLISH_DIR" -c user.name='City Wheels build' -c user.email='build@users.noreply.github.com' commit -m "Publish City Wheels browser prototype"
 git -C "$PUBLISH_DIR" remote add origin "$REMOTE_URL"
