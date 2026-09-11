@@ -1,0 +1,48 @@
+{
+  "id": "san-francisco",
+  "origin": {
+    "lat": 37.8024,
+    "lon": -122.4169,
+    "epsg": 32610,
+    "easting": 551331.9065731339,
+    "northing": 4184051.363202449
+  },
+  "bounds": {
+    "minX": -500.0,
+    "maxX": 500.0,
+    "minY": -500.0,
+    "maxY": 500.0
+  },
+  "statistics": {
+    "roadCount": 264,
+    "buildingCount": 1925,
+    "intersectionCount": 671,
+    "roadLengthMeters": 22076.3,
+    "onewayRoadCount": 43,
+    "heightSources": {
+      "inferred-default-no-osm-height": 357,
+      "estimated-from-osm:building:levels": 20,
+      "osm:height": 1548
+    }
+  },
+  "elevationRangeMeters": [
+    3.483,
+    109.901
+  ],
+  "spawn": {
+    "position": [
+      131.777,
+      159.034,
+      8.979
+    ],
+    "headingRadians": 2.256959,
+    "roadId": "706549350:0"
+  },
+  "limitations": [
+    "Building facade appearance is a procedural neighbourhood palette, not photographic reconstruction.",
+    "Missing OSM building heights are explicitly marked estimates.",
+    "Ground DEM does not define bridge decks; bridges/tunnels need dedicated authored deck profiles before expansion.",
+    "Landmarks outside this 1 km tile have null elevation and are metadata only.",
+    "Bradford Street lies outside this initial Russian Hill tile."
+  ]
+}

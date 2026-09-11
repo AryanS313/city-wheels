@@ -1,0 +1,17 @@
+node_modules/
+web/dist/
+web/public/data/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.sites-runtime/
+.env*
+!.env.example
+unreal/Binaries/
+unreal/Intermediate/
+unreal/Saved/
+unreal/DerivedDataCache/
+work/
+unreal/Content/CityData/
+unreal/Packaged/

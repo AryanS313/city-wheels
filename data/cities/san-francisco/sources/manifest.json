@@ -1,0 +1,140 @@
+{
+  "sources": [
+    {
+      "file": "sources/osm.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/map?bbox=-122.42375733762195%2C37.79695843211977%2C-122.41004166868323%2C37.807841181687095",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:44:32.768021+00:00",
+      "sha256": "bbc270051e2c9a0e3d6024e87d1fc4f12185eba381157b7430f6c2d8a09e626e",
+      "bytes": 893552,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "389c9c25a69f768f62b15ebb2b0156d93e336728aa4bae592385db690571969b"
+    },
+    {
+      "file": "sources/usgs-dem.tif",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage?f=json&bbox=550829.9534481339%2C4183549.410077449%2C551833.8596981339%2C4184553.316327449&bboxSR=32610&imageSR=32610&size=257%2C257&format=tiff&pixelType=F32&interpolation=RSP_BilinearInterpolation&renderingRule=%7B%22rasterFunction%22%3A%22None%22%7D&noDataInterpretation=esriNoDataMatchAny",
+      "retrievedAt": "2026-09-11T18:39:15.553047+00:00",
+      "sha256": "6abb6d2d5331c9acd32754ab2aa69ed62f5e2cd0e2d2cea68e3a7882b89ab06c",
+      "bytes": 591017,
+      "license": "USGS public domain",
+      "request": {
+        "f": "json",
+        "bbox": "550829.9534481339,4183549.410077449,551833.8596981339,4184553.316327449",
+        "bboxSR": 32610,
+        "imageSR": 32610,
+        "size": "257,257",
+        "format": "tiff",
+        "pixelType": "F32",
+        "interpolation": "RSP_BilinearInterpolation",
+        "renderingRule": "{\"rasterFunction\":\"None\"}",
+        "noDataInterpretation": "esriNoDataMatchAny"
+      }
+    },
+    {
+      "file": "sources/usgs-export.json",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage?f=json&bbox=550829.9534481339%2C4183549.410077449%2C551833.8596981339%2C4184553.316327449&bboxSR=32610&imageSR=32610&size=257%2C257&format=tiff&pixelType=F32&interpolation=RSP_BilinearInterpolation&renderingRule=%7B%22rasterFunction%22%3A%22None%22%7D&noDataInterpretation=esriNoDataMatchAny",
+      "retrievedAt": "2026-09-11T18:39:15.554091+00:00",
+      "sha256": "d5f70393d2924440b192dc69c4681a4adb7c14bbea51363d31534713ab544e22",
+      "bytes": 360,
+      "license": "USGS public domain",
+      "request": {
+        "f": "json",
+        "bbox": "550829.9534481339,4183549.410077449,551833.8596981339,4184553.316327449",
+        "bboxSR": 32610,
+        "imageSR": 32610,
+        "size": "257,257",
+        "format": "tiff",
+        "pixelType": "F32",
+        "interpolation": "RSP_BilinearInterpolation",
+        "renderingRule": "{\"rasterFunction\":\"None\"}",
+        "noDataInterpretation": "esriNoDataMatchAny"
+      }
+    },
+    {
+      "file": "sources/usgs-service.json",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer?f=pjson",
+      "retrievedAt": "2026-09-11T18:39:16.513320+00:00",
+      "sha256": "a300a739a6e47627d1cd6921fca368004d88a8ac62d6d32c64571c669e4349bb",
+      "bytes": 12981,
+      "license": "USGS public domain",
+      "request": {
+        "f": "pjson"
+      }
+    },
+    {
+      "file": "sources/usgs-catalog.json",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/query?f=json&geometry=551331.9065731339%2C4184051.363202449&geometryType=esriGeometryPoint&inSR=32610&spatialRel=esriSpatialRelIntersects&outFields=%2A&returnGeometry=false",
+      "retrievedAt": "2026-09-11T18:39:19.834513+00:00",
+      "sha256": "6d9ace6558d66f0cc58c17fd5792e870302b56b9894c70e405e1e1b371f02515",
+      "bytes": 596861,
+      "license": "USGS public domain",
+      "request": {
+        "f": "json",
+        "geometry": "551331.9065731339,4184051.363202449",
+        "geometryType": "esriGeometryPoint",
+        "inSR": 32610,
+        "spatialRel": "esriSpatialRelIntersects",
+        "outFields": "*",
+        "returnGeometry": "false"
+      }
+    },
+    {
+      "file": "sources/landmark-way-370672707.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/way/370672707/full",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:50:06.254430+00:00",
+      "sha256": "d4edcd069277170fa2dcef8036c8bd2e044a922d66526e13002643f706d35f62",
+      "bytes": 3247,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "50853aeebd7eb527f8b40ec09c083d544746a6c63b18d2f7509082a7b2b30608"
+    },
+    {
+      "file": "sources/landmark-node-4972243722.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/node/4972243722",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:50:06.726584+00:00",
+      "sha256": "becfc128c50c9c269bba73a212edd679c3574b9d2131f92f04136efcf327cf6f",
+      "bytes": 459,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "5bc0b31940d7bdf4836694aee81419d47ffa41e3c1009f23bf77f6bc25d468a1"
+    },
+    {
+      "file": "sources/landmark-way-28824850.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/way/28824850/full",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:50:07.216679+00:00",
+      "sha256": "ed395dff1fd76b2a6731479fafa95012fb0cd1eb2f9a99bae5925cc51f52ac12",
+      "bytes": 1389,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "69bb5ef42bda7e49e26ae940f0bb6e05f7025187f214c4a82cb9362d049f5a29"
+    },
+    {
+      "file": "sources/landmark-way-199829618.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/way/199829618/full",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:50:07.703675+00:00",
+      "sha256": "2300d5075c319092e437a9586d8bae27063fd4f6f11e61e9c26b1b0a40dc32c3",
+      "bytes": 1845,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "98130783005901736fd7a9e7331022b8dc74d3d145fccf8fdb7ea3fc48150e72"
+    },
+    {
+      "file": "sources/landmark-way-24222973.xml.gz",
+      "url": "https://api.openstreetmap.org/api/0.6/way/24222973/full",
+      "request": null,
+      "retrievedAt": "2026-09-11T18:50:08.154965+00:00",
+      "sha256": "19ae14fb7a7e0028a12dba327ba47885f21482b7490285c0b7dad683430a4925",
+      "bytes": 1091,
+      "license": "ODbL-1.0",
+      "contentEncoding": "gzip",
+      "originalContentSha256": "84d4bef633432122ba9399ea2fd1e1bdb689969484fae9e7ac1306c5d7c6223d"
+    }
+  ],
+  "osmAttribution": "\u00a9 OpenStreetMap contributors",
+  "osmLicense": "https://www.openstreetmap.org/copyright"
+}

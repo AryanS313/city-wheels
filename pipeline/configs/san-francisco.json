@@ -1,0 +1,25 @@
+{
+  "id": "san-francisco",
+  "name": "San Francisco — Russian Hill",
+  "origin": {"lat": 37.8024, "lon": -122.4169, "epsg": 32610},
+  "sizeMeters": 1000,
+  "terrainSamples": 257,
+  "roadSampleMeters": 5,
+  "sourceBufferMeters": 100,
+  "elevationService": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer",
+  "defaultBuildingLevels": 3,
+  "defaultFacadeStyle": "russian-hill-stucco",
+  "neighbourhoodStyles": [
+    {"name": "Haight-Ashbury", "boundsLonLat": [-122.455, 37.764, -122.435, 37.774], "style": "victorian"},
+    {"name": "SoMa", "boundsLonLat": [-122.417, 37.765, -122.388, 37.79], "style": "glass-tower"},
+    {"name": "Sunset", "boundsLonLat": [-122.511, 37.735, -122.46, 37.765], "style": "pastel-house"}
+  ],
+  "landmarks": [
+    {"name": "Golden Gate Bridge", "kind": "suspension-bridge", "osmType": "way", "osmId": 370672707},
+    {"name": "Lombard Street", "kind": "crooked-street", "osmType": "node", "osmId": 4972243722},
+    {"name": "Coit Tower", "kind": "observation-tower", "osmType": "way", "osmId": 28824850},
+    {"name": "Pier 39", "kind": "pier", "osmType": "way", "osmId": 199829618},
+    {"name": "Transamerica Pyramid", "kind": "skyscraper", "osmType": "way", "osmId": 24222973}
+  ],
+  "spawnRoad": "Columbus Avenue"
+}
