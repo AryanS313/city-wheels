@@ -1,0 +1,29 @@
+City Wheels third-party attribution
+
+OpenStreetMap: © OpenStreetMap contributors
+https://www.openstreetmap.org/copyright
+OpenStreetMap source data and the derived geographic database are available
+under the Open Data Commons Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+The complete corresponding derived database is in data/cities/san-francisco/city.json.
+Original compressed XML and provenance/checksums are in that directory's sources/.
+The repository's MIT license does not relicense this database.
+
+Elevation: US Geological Survey, 3D Elevation Program (3DEP).
+https://www.usgs.gov/3d-elevation-program
+https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer
+USGS source elevation and exported service metadata are retained with checksums.
+No claim is made that interpolated road profiles constitute a engineering survey.
+
+Browser runtime libraries: Three.js and cannon-es (MIT), Vite (MIT).
+Fonts: DM Sans and Barlow Condensed (SIL Open Font License), distributed by Fontsource.
+Dependency packages retain their included license notices.
+
+Unreal Engine is a trademark of Epic Games, Inc. The Engine is not redistributed.
+This independent project is not affiliated with Epic Games or the City of San Francisco.
+CarConcept model: Eric Chadwick / Darmstadt Graphics Group, via Khronos Group.
+https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CarConcept
+Licensed CC BY 4.0. Adapted orientation, dimensions, wheel alignment, paint and damage.
+Source, attribution and full license: web/public/assets/car/.
+The fictional Meridian GT name and vehicle tuning are original gameplay content.
+Earcut (ISC) is used for footprint triangulation.
