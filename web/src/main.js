@@ -17,6 +17,7 @@ import { DrivingEffects } from "./effects.js";
 import { PursuitSystem } from "./pursuit.js";
 import { DrivingSession, THEFT_RULES } from "./gameplay.js";
 import { createCityPlaces, createPlaceVisuals } from "./places.js";
+import { createBoundaryLayout, createBoundaryVisuals } from "./map-boundary.js";
 
 const $ = (id) => document.getElementById(id);
 const keys = new Set();
@@ -37,6 +38,9 @@ let sim,
   session,
   districtPlaces,
   sound = false,
+  frameRequest = 0,
+  graphicsLost = false,
+  runtimeFailed = false,
   drag = null;
 const map = $("minimap").getContext("2d");
 const clockHours = {
@@ -429,7 +433,67 @@ for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
   });
 
 function tick(now) {
-  requestAnimationFrame(tick);
+  frameRequest = 0;
+  if (graphicsLost || runtimeFailed) return;
+  try {
+    updateFrame(now);
+    frameRequest = requestAnimationFrame(tick);
+  } catch (error) {
+    console.error("City Wheels stopped after a frame error:", error);
+    runtimeFailed = true;
+    stopForRecovery(
+      "The drive was interrupted",
+      "Restart the game to begin a fresh drive.",
+    );
+  }
+}
+function stopForRecovery(title, detail) {
+  cancelAnimationFrame(frameRequest);
+  frameRequest = 0;
+  setPaused(true);
+  $("recovery-title").textContent = title;
+  $("recovery-detail").textContent = detail;
+  $("recovery").hidden = false;
+  // Recovery must still appear if invalid telemetry caused an audio failure.
+  try {
+    if (sim) vehicleAudio.update(sim, false, pursuit);
+  } catch {
+    vehicleAudio.context?.suspend().catch(() => {});
+  }
+}
+$("reload-game").addEventListener("click", () => location.reload());
+$("world").addEventListener("webglcontextlost", (event) => {
+  event.preventDefault();
+  graphicsLost = true;
+  stopForRecovery(
+    "Restoring the display…",
+    "Your drive is paused while the graphics recover. You can restart if this message remains.",
+  );
+});
+$("world").addEventListener("webglcontextrestored", () => {
+  if (runtimeFailed) return;
+  try {
+    if (view) {
+      view.setWeather(view.weather);
+      view.cameraCar = null;
+    }
+    effects?.resetTracking();
+    graphicsLost = false;
+    $("recovery").hidden = true;
+    lastTime = performance.now();
+    if (session && !frameRequest) frameRequest = requestAnimationFrame(tick);
+    if (session)
+      toast("Display restored. Click the road to resume your drive.", 8000);
+  } catch (error) {
+    console.error("City Wheels graphics recovery failed:", error);
+    runtimeFailed = true;
+    stopForRecovery(
+      "Please restart the game",
+      "The display could not recover. Restart to begin a fresh drive.",
+    );
+  }
+});
+function updateFrame(now) {
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   if (!sim || !view) return;
@@ -501,6 +565,8 @@ async function boot() {
       streetObjects: objects,
     });
     sim.addObstacles([...objects, ...districtPlaces.obstacles]);
+    const boundary = createBoundaryLayout(city, groundAt);
+    sim.addObstacles(boundary);
     const streetVisuals = createStreetVisuals(objects, { maxLights: 6 });
     const renderCity = {
       ...city,
@@ -513,6 +579,7 @@ async function boot() {
       sampleElevation: groundAt,
       streetVisuals,
     });
+    view.scene.add(createBoundaryVisuals(boundary).group);
     $("play").textContent = "Loading detailed car…";
     await view.loadVehicles();
     const placesVisuals = createPlaceVisuals(districtPlaces.places);
@@ -531,7 +598,24 @@ async function boot() {
     view.camera.position.set(p.x + 9, p.y + 5, p.z + 9);
     $("play").disabled = false;
     $("play").textContent = "Take the wheel →";
-    requestAnimationFrame(tick);
+    frameRequest = requestAnimationFrame(tick);
+    if (
+      import.meta.env.DEV &&
+      new URLSearchParams(location.search).has("stability-test")
+    ) {
+      const { installStabilityPanel } = await import(
+        "../test/browser-stability.js"
+      );
+      installStabilityPanel({
+        sim,
+        view,
+        life,
+        session,
+        pursuit,
+        effects,
+        pause: () => setPaused(true),
+      });
+    }
   } catch (error) {
     console.error(error);
     $("play").textContent = "Unable to start";
@@ -577,6 +661,7 @@ $("capture").addEventListener("click", () => {
   view.screenshot();
 });
 window.addEventListener("keydown", (e) => {
+  if (graphicsLost || runtimeFailed) return;
   if (session?.busted) {
     if (e.code === "Enter") restartDrive();
     return;

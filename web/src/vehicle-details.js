@@ -26,6 +26,7 @@ function cube(root, w, h, d, material, x, y, z) {
 }
 
 export function addVehicleDetails(visual, record) {
+  if (visual.details || visual.disposed) return;
   const group = new THREE.Group();
   visual.root.add(group);
   visual.details = group;
@@ -75,10 +76,14 @@ export function addVehicleDetails(visual, record) {
     visual.policeLights = [red, blue];
     const spot = new THREE.PointLight("#267bff", 0, 9, 2);
     spot.position.set(0, 0.72, 0);
+    spot.visible = false;
     group.add(spot);
     visual.policeGlow = spot;
   }
+  let disposed = false;
   visual.detailsDispose = () => {
+    if (disposed) return;
+    disposed = true;
     const geometries = new Set(),
       materials = new Set();
     group.traverse((object) => {
@@ -90,6 +95,8 @@ export function addVehicleDetails(visual, record) {
     geometries.forEach((g) => g.dispose());
     materials.forEach((m) => m.dispose());
     group.removeFromParent();
+    visual.details = visual.driver = visual.policeGlow = null;
+    visual.policeLights = null;
   };
 }
 
@@ -109,5 +116,6 @@ export function updateVehicleDetails(
   if (visual.policeGlow) {
     visual.policeGlow.color.set(phase ? "#207bff" : "#ff2145");
     visual.policeGlow.intensity = active && distance < 55 ? 8 : 0;
+    visual.policeGlow.visible = visual.policeGlow.intensity > 0;
   }
 }

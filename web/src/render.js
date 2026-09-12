@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   loadCarAsset,
   createCarVisual,
+  setCarVisualState,
   updateCarVisual,
 } from "./car-visual.js";
 import { addVehicleDetails, updateVehicleDetails } from "./vehicle-details.js";
@@ -117,7 +118,7 @@ export class CityRenderer {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
       powerPreference: "high-performance",
     });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
@@ -134,6 +135,8 @@ export class CityRenderer {
     this.lightPosts = [];
     this.carVisuals = new Map();
     this.target = new THREE.Vector3();
+    this.cameraAnchor = new THREE.Vector3();
+    this.previousCarPosition = new THREE.Vector3();
     this.sun = new THREE.DirectionalLight("#ffe1af", 3.2);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -377,7 +380,6 @@ export class CityRenderer {
       this.lampMat = new THREE.MeshStandardMaterial({ emissive: "#ffca81" });
       this.nearLights = [];
     } else this.createStreetFurniture();
-    this.createBoundary();
   }
   createBuildings() {
     const facade = facadeTexture("house"),
@@ -536,43 +538,6 @@ export class CityRenderer {
       this.nearLights.push(light);
     }
   }
-  createBoundary() {
-    const b = this.city.bounds,
-      p = [];
-    for (const [[ax, an], [bx, bn]] of [
-      [
-        [b.minX, b.minY],
-        [b.maxX, b.minY],
-      ],
-      [
-        [b.maxX, b.minY],
-        [b.maxX, b.maxY],
-      ],
-      [
-        [b.maxX, b.maxY],
-        [b.minX, b.maxY],
-      ],
-      [
-        [b.minX, b.maxY],
-        [b.minX, b.minY],
-      ],
-    ])
-      for (let t = 0; t < 1; t += 0.01) {
-        const x = THREE.MathUtils.lerp(ax, bx, t),
-          n = THREE.MathUtils.lerp(an, bn, t);
-        p.push(x, terrainHeight(this.city, x, n) + 1, -n);
-      }
-    this.boundary = new THREE.Points(
-      meshGeometry(p),
-      new THREE.PointsMaterial({
-        color: "#ffd39f",
-        size: 0.3,
-        transparent: true,
-        opacity: 0.55,
-      }),
-    );
-    this.scene.add(this.boundary);
-  }
   createRain() {
     const positions = new Float32Array(1800 * 3);
     for (let i = 0; i < positions.length; i += 3) {
@@ -696,6 +661,19 @@ export class CityRenderer {
     this.clock += dt;
     const car = sim.vehicle,
       body = car.body;
+    if (
+      ![
+        body.position.x,
+        body.position.y,
+        body.position.z,
+        body.quaternion.x,
+        body.quaternion.y,
+        body.quaternion.z,
+        body.quaternion.w,
+        sim.speedKph,
+      ].every(Number.isFinite)
+    )
+      throw new Error("The current vehicle has an invalid transform.");
     for (const record of [car, ...sim.traffic]) {
       const player = record === car;
       const distance = record.body.position.distanceTo(car.body.position);
@@ -709,13 +687,9 @@ export class CityRenderer {
           : distance < 65
             ? "full"
             : "medium";
-      // Allocate the detailed body only when it can be seen. Ownership changes
-      // rebuild interior/headlights while preserving the physical car and damage.
+      // Retain each car's mesh and materials through ownership and LOD changes.
       if (visual && (visual.player !== player || visual.detail !== detail)) {
-        visual.detailsDispose?.();
-        visual.dispose();
-        this.carVisuals.delete(record);
-        visual = null;
+        setCarVisualState(visual, { player, detail });
       }
       if (!visual && (player || distance < 300)) {
         visual = this.createCar(
@@ -799,8 +773,18 @@ export class CityRenderer {
       look = bp.clone().addScaledVector(heading, 6).addScaledVector(UP, 0.7);
     }
     desired.y = Math.max(desired.y, this.groundAt(desired.x, -desired.z) + 0.7);
-    if (this.mode === 1 && !this.photo) this.camera.position.copy(desired);
-    else this.camera.position.lerp(desired, 1 - Math.exp(-dt * 5));
+    const cameraMode = this.photo ? "photo" : playing ? this.mode : "intro";
+    const switched = this.cameraCar !== car || this.cameraMode !== cameraMode;
+    const recovered = this.previousCarPosition.distanceTo(bp) > 25;
+    if (switched || recovered || (this.mode === 1 && !this.photo)) {
+      this.cameraAnchor.copy(desired);
+      if (switched || recovered) this.effects?.resetTracking();
+    } else this.cameraAnchor.lerp(desired, 1 - Math.exp(-dt * 5));
+    this.cameraCar = car;
+    this.cameraMode = cameraMode;
+    this.previousCarPosition.copy(bp);
+    // Shake is an offset from the stable camera, never fed back into smoothing.
+    this.camera.position.copy(this.cameraAnchor);
     if (playing && !this.photo && this.effects)
       this.camera.position.add(this.effects.offset());
     this.camera.lookAt(look);

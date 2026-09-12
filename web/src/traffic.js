@@ -126,7 +126,7 @@ export class TrafficNetwork {
     // Most cars continue naturally along a street; occasional turns diversify flow.
     return ranked[seed % 7 === 0 && ranked.length > 1 ? 1 : 0].e;
   }
-  spawnCandidates(playerPosition, count) {
+  spawnCandidates(playerPosition, count, isClear = () => true) {
     const player = { x: playerPosition.x, y: -playerPosition.z };
     const candidates = [];
     for (const edge of this.edges) {
@@ -141,6 +141,13 @@ export class TrafficNetwork {
         next = route[index + 1];
       const d = dist(player, p);
       if (d < 26) continue;
+      if (
+        !isClear({
+          ...p,
+          headingRadians: Math.atan2(next.x - p.x, next.y - p.y),
+        })
+      )
+        continue;
       candidates.push({ d, p, next, edge, index });
     }
     candidates.sort(
@@ -187,7 +194,7 @@ export class TrafficNetwork {
     }
     return count > 0 ? result : [];
   }
-  parkedCandidates(playerPosition, count, existing = []) {
+  parkedCandidates(playerPosition, count, existing = [], isClear = () => true) {
     const result = [],
       used = existing.map((v) => ({
         x: v.body.position.x,
@@ -217,6 +224,8 @@ export class TrafficNetwork {
           used.some((j) => dist(j, parked) < 10) ||
           dist({ x: playerPosition.x, y: -playerPosition.z }, parked) < 12
         )
+          continue;
+        if (!isClear({ ...parked, headingRadians: Math.atan2(dx, dy) }))
           continue;
         result.push({
           spawn: { ...parked, headingRadians: Math.atan2(dx, dy) },
@@ -520,6 +529,26 @@ export class TrafficNetwork {
         ) +
           ((sim.speedKph || 0) / 3.6) * 0.6,
       );
+    const edgeMargin = Math.min(
+      body.position.x - (this.bounds.minX ?? -500),
+      (this.bounds.maxX ?? 500) - body.position.x,
+      -body.position.z - (this.bounds.minY ?? -500),
+      (this.bounds.maxY ?? 500) + body.position.z,
+    );
+    if (edgeMargin < Math.max(9, (speed * speed) / 10 + 4)) {
+      const forward = body.vectorToWorldFrame(new CANNON.Vec3(0, 0, -1));
+      const future = {
+        x: body.position.x + forward.x * 8,
+        y: -body.position.z - forward.z * 8,
+      };
+      const futureMargin = Math.min(
+        future.x - (this.bounds.minX ?? -500),
+        (this.bounds.maxX ?? 500) - future.x,
+        future.y - (this.bounds.minY ?? -500),
+        (this.bounds.maxY ?? 500) - future.y,
+      );
+      if (futureMargin < edgeMargin) desiredSpeed = 0;
+    }
     c.throttle = clamp(
       (desiredSpeed - speed) * 0.42,
       0,

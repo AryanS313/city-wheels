@@ -1,12 +1,12 @@
 {
   "name": "city-wheels-browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "node ../scripts/stage-city.mjs && vite build",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "^5.2.6",

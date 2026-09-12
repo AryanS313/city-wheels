@@ -935,3 +935,24 @@ body.busted #toast {
     display: none;
   }
 }
+/* Visible even if the canvas loses its graphics context. */
+.recovery-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: #101c27ed;
+}
+.recovery-overlay[hidden] {
+  display: none;
+}
+.recovery-overlay h2 {
+  font-size: clamp(26px, 4vw, 44px);
+}
+.recovery-overlay button {
+  padding: 14px 24px;
+  background: #f5c273;
+  color: #14222b;
+  border: 0;
+}

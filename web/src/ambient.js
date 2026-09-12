@@ -711,7 +711,14 @@ class PersonBatches {
       mesh.castShadow = kind === "sphere" || kind === "capsule";
       mesh.receiveShadow = true;
       mesh.name = `Residents ${kind}`;
-      this.entries.set(kind, { mesh, next: 0 });
+      this.entries.set(kind, {
+        mesh,
+        next: 0,
+        matrixFirst: Infinity,
+        matrixLast: -1,
+        colorFirst: Infinity,
+        colorLast: -1,
+      });
       group.add(mesh);
     }
     this.matrix = new THREE.Matrix4();
@@ -739,6 +746,8 @@ class PersonBatches {
         index,
         node.material.color || new THREE.Color(0xffffff),
       );
+      entry.colorFirst = Math.min(entry.colorFirst, index);
+      entry.colorLast = Math.max(entry.colorLast, index);
       const scale =
         kind === "cylinder"
           ? [params.radiusTop || 1, params.height || 1, params.radiusTop || 1]
@@ -773,6 +782,8 @@ class PersonBatches {
   sync(visual, distance) {
     visual.group.updateMatrixWorld(true);
     for (const part of visual.parts) {
+      part.entry.matrixFirst = Math.min(part.entry.matrixFirst, part.index);
+      part.entry.matrixLast = Math.max(part.entry.matrixLast, part.index);
       if (distance > 600 || (part.detail && distance > 85)) {
         part.entry.mesh.setMatrixAt(part.index, ZERO_MATRIX);
         continue;
@@ -784,9 +795,30 @@ class PersonBatches {
     }
   }
   finish() {
-    for (const { mesh } of this.entries.values()) {
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    // Preserve pending writes across multiple updates before a render, while
+    // uploading only the used range. Color data changes only when people spawn.
+    const upload = (attribute, first, last, stride) => {
+      if (!attribute || last < first) return;
+      let start = first * stride,
+        end = (last + 1) * stride;
+      for (const range of attribute.updateRanges) {
+        start = Math.min(start, range.start);
+        end = Math.max(end, range.start + range.count);
+      }
+      attribute.clearUpdateRanges();
+      attribute.addUpdateRange(start, end - start);
+      attribute.needsUpdate = true;
+    };
+    for (const entry of this.entries.values()) {
+      upload(
+        entry.mesh.instanceMatrix,
+        entry.matrixFirst,
+        entry.matrixLast,
+        16,
+      );
+      upload(entry.mesh.instanceColor, entry.colorFirst, entry.colorLast, 3);
+      entry.matrixFirst = entry.colorFirst = Infinity;
+      entry.matrixLast = entry.colorLast = -1;
     }
   }
   reset() {
@@ -797,6 +829,8 @@ class PersonBatches {
   }
   dispose() {
     for (const { mesh } of this.entries.values()) {
+      // Instance attributes have their own WebGL buffers, separate from geometry.
+      mesh.dispose();
       mesh.geometry.dispose();
       mesh.removeFromParent();
     }

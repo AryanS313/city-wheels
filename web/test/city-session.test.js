@@ -7,6 +7,7 @@ import { createStreetLayout, AmbientLife } from "../src/ambient.js";
 import { createCityPlaces } from "../src/places.js";
 import { PursuitSystem } from "../src/pursuit.js";
 import { DrivingSession } from "../src/gameplay.js";
+import { createBoundaryLayout } from "../src/map-boundary.js";
 
 test("dense SF city connects pedestrian incidents, physical pursuit, BUSTED and a healthy restart", () => {
   const city = JSON.parse(
@@ -21,6 +22,7 @@ test("dense SF city connects pedestrian incidents, physical pursuit, BUSTED and 
   });
   const objects = [...street, ...places.obstacles];
   sim.addObstacles(objects);
+  sim.addObstacles(createBoundaryLayout(city, sim.sampleElevation.bind(sim)));
   const life = new AmbientLife(city, sim, new THREE.Scene(), {
     objects,
     count: 150,

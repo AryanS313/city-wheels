@@ -77,6 +77,12 @@ export class DrivingEffects {
       });
     }
   }
+  resetTracking() {
+    this.previous.fill(null);
+    this.shake = 0;
+    this.shakeAge = 0;
+    this.lastMarkTime = 0;
+  }
   update(sim, dt, paused = false) {
     if (paused) return;
     this.shakeAge += dt;

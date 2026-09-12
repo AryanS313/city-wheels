@@ -102,23 +102,39 @@ export class PursuitSystem {
     if (from.distanceTo(to) > this.config.sightDistance) return false;
     from.y += 0.38;
     to.y += 0.38;
+    // Sample the existing piecewise terrain directly. Casting a125m ray through
+    // Cannon's heightfield materializes thousands of cached triangle prisms.
+    const length = from.distanceTo(to),
+      samples = Math.max(1, Math.ceil(length));
+    for (let i = 1; i < samples; i++) {
+      const t = i / samples,
+        x = from.x + (to.x - from.x) * t,
+        y = from.y + (to.y - from.y) * t,
+        z = from.z + (to.z - from.z) * t;
+      if (this.sim.sampleElevation(x, -z) > y + 0.04) return false;
+    }
     let blocked = false;
-    this.sim.world.raycastAll(from, to, { skipBackfaces: false }, (hit) => {
-      if (
-        hit.body === officer.body ||
-        hit.body === target.body ||
-        hit.body?.isVehicle ||
-        hit.body?.isPedestrian
-      )
-        return;
-      const surface = hit.shape?.surface || hit.body?.surface;
-      if (
-        surface === "building" ||
-        surface === "ground" ||
-        surface === "obstacle"
-      )
-        blocked = true;
-    });
+    this.sim.world.raycastAll(
+      from,
+      to,
+      { skipBackfaces: false, collisionFilterMask: ~2 },
+      (hit) => {
+        if (
+          hit.body === officer.body ||
+          hit.body === target.body ||
+          hit.body?.isVehicle ||
+          hit.body?.isPedestrian
+        )
+          return;
+        const surface = hit.shape?.surface || hit.body?.surface;
+        if (
+          surface === "building" ||
+          surface === "ground" ||
+          surface === "obstacle"
+        )
+          blocked = true;
+      },
+    );
     return !blocked;
   }
   update(dt) {

@@ -318,6 +318,56 @@ const POLICE_PROFILE = {
   style: "police",
 };
 
+// Cannon caches every terrain triangle touched by vehicles or police rays.
+// A bounded LRU retains the local working set without keeping an entire session.
+class BoundedHeightfield extends CANNON.Heightfield {
+  constructor(data, options) {
+    super(data, options);
+    this.pillarCache = new Map();
+    this.cacheLimit = 8192;
+  }
+  getCachedConvexTrianglePillar(x, y, upper) {
+    const key = this.getCacheConvexTrianglePillarKey(x, y, upper),
+      value = this.pillarCache?.get(key);
+    if (value) {
+      this.pillarCache.delete(key);
+      this.pillarCache.set(key, value);
+    }
+    return value;
+  }
+  setCachedConvexTrianglePillar(x, y, upper, convex, offset) {
+    if (!this.pillarCache) return;
+    const key = this.getCacheConvexTrianglePillarKey(x, y, upper);
+    this.pillarCache.set(key, { convex, offset });
+    if (this.pillarCache.size > this.cacheLimit)
+      this.pillarCache.delete(this.pillarCache.keys().next().value);
+  }
+  update() {
+    super.update();
+    this.pillarCache?.clear();
+  }
+}
+function pointInRing(p, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i],
+      b = ring[j];
+    if (
+      a.y > p.y !== b.y > p.y &&
+      p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x
+    )
+      inside = !inside;
+  }
+  return inside;
+}
+function segmentsCross(a, b, c, d) {
+  const cross = (p, q, r) =>
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  return (
+    cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0
+  );
+}
+
 export class CitySimulation {
   constructor(city, options = {}) {
     this.city = city;
@@ -514,14 +564,16 @@ export class CitySimulation {
       -Math.PI / 2,
     );
     this.groundBody = this.#static(
-      new CANNON.Heightfield(data, { elementSize: cellSize }),
+      new BoundedHeightfield(data, { elementSize: cellSize }),
       new CANNON.Vec3(source.minX, 0, -source.minY),
       q,
       "ground",
     );
+    this.groundBody.collisionFilterGroup = 2;
   }
   #buildBuildings() {
     this.buildingColliderCount = 0;
+    this.buildingFootprints = [];
     for (const building of this.city.buildings || []) {
       const footprint = (building.footprint || building.points || []).map(
         point,
@@ -547,6 +599,15 @@ export class CitySimulation {
         building.baseElevation ??
         building.elevation ??
         Math.min(...footprint.map((p) => p.z));
+      this.buildingFootprints.push({
+        rings,
+        base,
+        height,
+        minX: Math.min(...footprint.map((p) => p.x)),
+        maxX: Math.max(...footprint.map((p) => p.x)),
+        minY: Math.min(...footprint.map((p) => p.y)),
+        maxY: Math.max(...footprint.map((p) => p.y)),
+      });
       // Triangle prisms exactly decompose a concave footprint and courtyard holes.
       // A hull would silently fill alleys/open courtyards and create ghost walls.
       for (let i = 0; i < triangles.length; i += 3) {
@@ -582,6 +643,72 @@ export class CitySimulation {
         this.buildingColliderCount++;
       }
     }
+  }
+  get terrainCacheStats() {
+    const shape = this.groundBody.shapes[0];
+    return { entries: shape.pillarCache.size, limit: shape.cacheLimit };
+  }
+  isSpawnClear(spawn) {
+    const terrain = this.terrainRenderData,
+      b = terrain.bounds,
+      minX = b.minX,
+      minY = b.minY,
+      maxX = minX + (terrain.width - 1) * terrain.cellSize,
+      maxY = minY + (terrain.height - 1) * terrain.cellSize;
+    if (
+      spawn.x < minX + 4 ||
+      spawn.x > maxX - 4 ||
+      spawn.y < minY + 4 ||
+      spawn.y > maxY - 4
+    )
+      return false;
+    const heading = spawn.headingRadians || 0,
+      fx = Math.sin(heading),
+      fy = Math.cos(heading),
+      rx = fy,
+      ry = -fx;
+    const rectangle = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ].map(([x, y]) => ({
+      x: spawn.x + rx * x * 0.97 + fx * (0.176 + y * 2.15),
+      y: spawn.y + ry * x * 0.97 + fy * (0.176 + y * 2.15),
+    }));
+    const ground = this.sampleElevation(spawn.x, spawn.y);
+    for (const building of this.buildingFootprints) {
+      if (
+        building.maxX < spawn.x - 2.8 ||
+        building.minX > spawn.x + 2.8 ||
+        building.maxY < spawn.y - 2.8 ||
+        building.minY > spawn.y + 2.8 ||
+        building.base > ground + 1.05 ||
+        building.base + building.height < ground + 0.15
+      )
+        continue;
+      const [outer, ...holes] = building.rings;
+      if (
+        rectangle.some(
+          (p) => pointInRing(p, outer) && !holes.some((h) => pointInRing(p, h)),
+        )
+      )
+        return false;
+      if (outer.some((p) => pointInRing(p, rectangle))) return false;
+      for (const ring of building.rings)
+        for (let i = 0; i < ring.length; i++)
+          for (let j = 0; j < 4; j++)
+            if (
+              segmentsCross(
+                ring[i],
+                ring[(i + 1) % ring.length],
+                rectangle[j],
+                rectangle[(j + 1) % 4],
+              )
+            )
+              return false;
+    }
+    return true;
   }
   addObstacles(obstacles) {
     for (const obstacle of obstacles) {
@@ -816,7 +943,7 @@ export class CitySimulation {
           z: road.elevation,
           headingRadians: Math.atan2(dx, dy),
         };
-        if (!blocked(candidate)) {
+        if (!blocked(candidate) && this.isSpawnClear(candidate)) {
           spawn = candidate;
           break;
         }
@@ -836,6 +963,7 @@ export class CitySimulation {
     const candidates = this.trafficNetwork.spawnCandidates(
       this.vehicle.body.position,
       count,
+      (spawn) => this.isSpawnClear(spawn),
     );
     const policeIndices = new Set(
       Array.from({ length: Math.min(policeCount, candidates.length) }, (_, i) =>
@@ -844,6 +972,45 @@ export class CitySimulation {
         ),
       ),
     );
+    // Keep a nearby patrol on an approaching connected road even when unsafe
+    // civilian spawn candidates are filtered out; index-only assignment shifts it.
+    const playerRoad = this.trafficNetwork.nearestEdge(
+      this.vehicle.body.position,
+    )?.edge.road;
+    const approach = candidates
+      .map((c, index) => ({ c, index }))
+      .filter(({ c }) => {
+        const road = c.routeState.edge.road;
+        const same =
+          road.id === playerRoad?.id ||
+          (road.name && road.name === playerRoad?.name);
+        return (
+          same &&
+          (this.vehicle.body.position.x - c.spawn.x) *
+            Math.sin(c.spawn.headingRadians) +
+            (-this.vehicle.body.position.z - c.spawn.y) *
+              Math.cos(c.spawn.headingRadians) >
+            5
+        );
+      })
+      .sort(
+        (a, b) =>
+          Math.hypot(
+            a.c.spawn.x - this.vehicle.body.position.x,
+            a.c.spawn.y + this.vehicle.body.position.z,
+          ) -
+          Math.hypot(
+            b.c.spawn.x - this.vehicle.body.position.x,
+            b.c.spawn.y + this.vehicle.body.position.z,
+          ),
+      )[0];
+    if (approach && policeIndices.size && !policeIndices.has(approach.index)) {
+      const replaceIndex = [...policeIndices][
+        Math.min(1, policeIndices.size - 1)
+      ];
+      policeIndices.delete(replaceIndex);
+      policeIndices.add(approach.index);
+    }
     for (const [index, candidate] of candidates.entries()) {
       const profile = policeIndices.has(index)
         ? POLICE_PROFILE
@@ -859,6 +1026,7 @@ export class CitySimulation {
       this.vehicle.body.position,
       count,
       this.traffic,
+      (spawn) => this.isSpawnClear(spawn),
     )) {
       const record = this.#createVehicle(
         candidate.spawn,

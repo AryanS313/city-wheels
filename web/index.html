@@ -26,7 +26,7 @@
           <span class="brand-icon">Ⅱ</span>
           <div>CITY WHEELS<small>SAN FRANCISCO</small></div>
         </div>
-        <span class="prototype">BROWSER PROTOTYPE · 0.3</span>
+        <span class="prototype">BROWSER PROTOTYPE · 0.3.1</span>
         <div class="top-actions">
           <button
             id="sound"
@@ -225,6 +225,20 @@
         ><button id="exit-photo">Back to driving</button>
       </div>
       <div id="error" hidden role="alert"></div>
+      <section
+        id="recovery"
+        class="recovery-overlay"
+        hidden
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="recovery-title"
+      >
+        <div class="busted-card">
+          <h2 id="recovery-title">Restoring the display…</h2>
+          <p id="recovery-detail">Your drive is paused.</p>
+          <button id="reload-game">Restart game</button>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

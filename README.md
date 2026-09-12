@@ -4,7 +4,11 @@
 
 Drive a real **1 km × 1 km** slice of Russian Hill, San Francisco, including crooked Lombard Street and steep Filbert Street. This repository contains a UE5 C++ starter, a reproducible OpenStreetMap/USGS import pipeline, and a public playable browser companion.
 
-**Status (v0.3):** the browser prototype has a detailed licensed car, 40 moving vehicles (including four police patrols), 16 parked cars, 150 residents, business scenery, police pursuit and car theft. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
+**Status (v0.3.1):** the browser prototype has a detailed licensed car, 40 moving vehicles (including four police patrols), 16 parked cars, 150 residents, business scenery, police pursuit and car theft. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
+
+## Stability update
+
+v0.3.1 retains vehicle visuals and damage during theft, resets the camera cleanly, bounds terrain physics memory and reduces crowd buffer uploads. Traffic spawns avoid buildings and the finite district has visible solid edge barriers. A lost graphics context pauses the drive and attempts to restore the display; a failed frame offers a restart. See [validation](docs/validation.md) for the tests and limits.
 
 ## Play
 
