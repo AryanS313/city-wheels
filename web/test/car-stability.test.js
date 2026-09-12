@@ -52,6 +52,13 @@ test("actual GLB: 60 ownership swaps preserve nodes, materials, dent buffers and
   scene.add(a.root, b.root, ...a.wheels, ...b.wheels);
   updateCarVisual(a, ra, { weather: "night" });
   updateCarVisual(b, rb, { weather: "night" });
+  // NPC damage uses the compact exterior until first promotion. Warm each
+  // representation once, then require repeated ownership to retain dent buffers.
+  assert.ok(b.deformMeshes.every((d) => !d.unique));
+  assert.ok(b.trafficDeformMeshes.some((d) => d.unique));
+  setCarVisualState(b, { player: true });
+  assert.ok(b.deformMeshes.some((d) => d.unique));
+  setCarVisualState(b, { player: false, detail: "medium" });
   const roots = [a.root, b.root],
     materials = [a.paint.uuid, b.paint.uuid],
     buffers = [
@@ -60,8 +67,8 @@ test("actual GLB: 60 ownership swaps preserve nodes, materials, dent buffers and
     ];
   const start = performance.now();
   for (let i = 0; i < 60; i++) {
-    setCarVisualState(a, { player: i % 2 === 0, detail: "full" });
-    setCarVisualState(b, { player: i % 2 !== 0, detail: "full" });
+    setCarVisualState(a, { player: i % 2 === 0, detail: "medium" });
+    setCarVisualState(b, { player: i % 2 !== 0, detail: "medium" });
     updateCarVisual(a, ra, { weather: "night" });
     updateCarVisual(b, rb, { weather: "night" });
     let lights = 0;
@@ -93,17 +100,30 @@ test("20 detail cycles keep source geometry immutable; damage is independent; di
   const source = t.groups.find((g) => g.deform),
     original = source.geometry.attributes.position.array.slice();
   let sharedDisposes = 0;
-  const shared = new Set(t.groups.map((g) => g.geometry));
+  // Check both hero buffers and the shared exterior traffic batch buffers.
+  const shared = new Set([
+    ...t.groups.map((g) => g.geometry),
+    ...Object.values(t.trafficBatches).flatMap((level) => [...level.values()]),
+  ]);
+  const snapshots = [...shared].map((g) => [
+    g,
+    g.attributes.position.array.slice(),
+  ]);
   shared.forEach((g) => g.addEventListener("dispose", () => sharedDisposes++));
   const a = createCarVisual("#aa3322", false, { detail: "medium" }),
     b = createCarVisual("#224477", false);
   const rb = record({ front: 0.75, right: 0.3 });
   for (let i = 0; i < 20; i++) {
-    setCarVisualState(a, { player: false, detail: i % 2 ? "full" : "medium" });
+    setCarVisualState(a, { player: false, detail: i % 2 ? "low" : "medium" });
     updateCarVisual(a, rb);
+    assert.equal(a.detail, i % 2 ? "low" : "medium");
+    assert.ok(a.trafficDeformMeshes.some((d) => d.unique));
+    assert.ok(a.deformMeshes.every((d) => !d.unique));
     finite(a);
   }
   assert.deepEqual(source.geometry.attributes.position.array, original);
+  for (const [geometry, snapshot] of snapshots)
+    assert.deepEqual(geometry.attributes.position.array, snapshot);
   assert.equal(
     b.deformMeshes.find(
       (d) => d.original === source.geometry.attributes.position.array,

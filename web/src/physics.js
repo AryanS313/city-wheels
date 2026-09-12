@@ -238,6 +238,10 @@ function railStrips(city) {
  * Clamp longitudinal force explicitly to mu * normal load to cover this case.
  */
 class LoadLimitedVehicle extends CANNON.RaycastVehicle {
+  updateVehicle(dt) {
+    if (this.chassisBody.sleepState === CANNON.Body.SLEEPING) return;
+    super.updateVehicle(dt);
+  }
   updateFriction(dt) {
     for (const w of this.wheelInfos) {
       w._requestedEngineForce = w.engineForce;
@@ -318,8 +322,197 @@ const POLICE_PROFILE = {
   style: "police",
 };
 
+// Merge only adjacent triangulation faces whose exact union is convex. This
+// removes internal triangle walls without filling concave alleys or courtyards.
+function convexBuildingParts(triangles, points) {
+  const parts = [];
+  const turn = (a, b, c) =>
+    (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+  for (let i = 0; i < triangles.length; i += 3) {
+    const part = triangles.slice(i, i + 3),
+      area = turn(...part.map((j) => points[j]));
+    if (Math.abs(area) < 0.025) continue;
+    if (area < 0) part.reverse();
+    parts.push(part);
+  }
+  for (let a = 0; a < parts.length; a++) {
+    let merged = true;
+    while (merged) {
+      merged = false;
+      for (let b = a + 1; b < parts.length && !merged; b++) {
+        const one = parts[a],
+          two = parts[b];
+        if (one.length + two.length > 18) continue;
+        for (let i = 0; i < one.length && !merged; i++)
+          for (let j = 0; j < two.length && !merged; j++) {
+            if (
+              one[i] !== two[(j + 1) % two.length] ||
+              one[(i + 1) % one.length] !== two[j]
+            )
+              continue;
+            const union = [];
+            for (let k = 1; k <= one.length; k++)
+              union.push(one[(i + k) % one.length]);
+            for (let k = 2; k < two.length; k++)
+              union.push(two[(j + k) % two.length]);
+            if (new Set(union).size !== union.length) continue;
+            if (
+              union.some(
+                (index, k) =>
+                  turn(
+                    points[index],
+                    points[union[(k + 1) % union.length]],
+                    points[union[(k + 2) % union.length]],
+                  ) < -1e-8,
+              )
+            )
+              continue;
+            parts[a] = union;
+            parts.splice(b, 1);
+            merged = true;
+          }
+      }
+    }
+  }
+  return parts.map((part) => part.map((index) => points[index]));
+}
+
 // Cannon caches every terrain triangle touched by vehicles or police rays.
-// A bounded LRU retains the local working set without keeping an entire session.
+// A bounded insertion-order cache avoids allocation on repeated ray hits.
+// Cannon's SAP ray query scans every body and its pair sweep uses spheres
+// even for tall static compounds. Sweep their exact AABBs on the sorted axis.
+// Test only terrain cells under a convex shape's exact local bounds. Cannon's
+// stock path expands its bounding sphere by an extra cell in every direction,
+// which makes each pedestrian cylinder test dozens of unrelated hill triangles.
+// The contact solver and triangle geometry remain Cannon's own implementation.
+class CityNarrowphase extends CANNON.Narrowphase {
+  constructor(world) {
+    super(world);
+    this.terrainPoint = new CANNON.Vec3();
+    this.terrainInverse = new CANNON.Quaternion();
+    this.terrainOffset = new CANNON.Vec3();
+    this.terrainFaceList = [0];
+  }
+  convexHeightfield(
+    shape,
+    terrain,
+    pos,
+    terrainPos,
+    rotation,
+    terrainRotation,
+    body,
+    terrainBody,
+    rsi,
+    rsj,
+    justTest,
+  ) {
+    terrainRotation.conjugate(this.terrainInverse);
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    const v = this.terrainPoint;
+    for (const vertex of shape.vertices) {
+      rotation.vmult(vertex, v);
+      v.vadd(pos, v);
+      v.vsub(terrainPos, v);
+      this.terrainInverse.vmult(v, v);
+      minX = Math.min(minX, v.x);
+      maxX = Math.max(maxX, v.x);
+      minY = Math.min(minY, v.y);
+      maxY = Math.max(maxY, v.y);
+      minZ = Math.min(minZ, v.z);
+    }
+    const cell = terrain.elementSize,
+      data = terrain.data;
+    const x0 = Math.max(0, Math.floor((minX - 1e-7) / cell)),
+      x1 = Math.min(data.length - 2, Math.floor((maxX + 1e-7) / cell));
+    const y0 = Math.max(0, Math.floor((minY - 1e-7) / cell)),
+      y1 = Math.min(data[0].length - 2, Math.floor((maxY + 1e-7) / cell));
+    for (let x = x0; x <= x1; x++)
+      for (let y = y0; y <= y1; y++) {
+        if (
+          Math.max(
+            data[x][y],
+            data[x + 1][y],
+            data[x][y + 1],
+            data[x + 1][y + 1],
+          ) +
+            1e-7 <
+          minZ
+        )
+          continue;
+        for (const upper of [false, true]) {
+          terrain.getConvexTrianglePillar(x, y, upper);
+          CANNON.Transform.pointToWorldFrame(
+            terrainPos,
+            terrainRotation,
+            terrain.pillarOffset,
+            this.terrainOffset,
+          );
+          const hit = this.convexConvex(
+            shape,
+            terrain.pillarConvex,
+            pos,
+            this.terrainOffset,
+            rotation,
+            terrainRotation,
+            body,
+            terrainBody,
+            null,
+            null,
+            justTest,
+            this.terrainFaceList,
+            null,
+          );
+          if (justTest && hit) return true;
+        }
+      }
+  }
+}
+
+class CityBroadphase extends CANNON.SAPBroadphase {
+  constructor(world) {
+    super(world);
+    this.useBoundingBoxes = true;
+  }
+  collisionPairs(world, p1, p2) {
+    if (this.dirty || this.axisList.some((body) => body.aabbNeedsUpdate)) {
+      this.sortList();
+      this.dirty = false;
+    }
+    const bodies = this.axisList,
+      axis = this.axisIndex === 1 ? "y" : this.axisIndex === 2 ? "z" : "x";
+    for (let i = 0; i < bodies.length; i++) {
+      const a = bodies[i],
+        max = a.aabb.upperBound[axis];
+      for (let j = i + 1; j < bodies.length; j++) {
+        const b = bodies[j];
+        if (b.aabb.lowerBound[axis] > max) break;
+        if (this.needBroadphaseCollision(a, b) && a.aabb.overlaps(b.aabb)) {
+          p1.push(a);
+          p2.push(b);
+        }
+      }
+    }
+  }
+  aabbQuery(world, aabb, result = []) {
+    if (this.dirty || this.axisList.some((body) => body.aabbNeedsUpdate)) {
+      this.sortList();
+      this.dirty = false;
+    }
+    const axis = this.axisIndex === 1 ? "y" : this.axisIndex === 2 ? "z" : "x",
+      min = aabb.lowerBound[axis],
+      max = aabb.upperBound[axis];
+    for (const body of this.axisList) {
+      if (body.aabb.lowerBound[axis] > max) break;
+      if (body.aabb.upperBound[axis] >= min && body.aabb.overlaps(aabb))
+        result.push(body);
+    }
+    return result;
+  }
+}
 class BoundedHeightfield extends CANNON.Heightfield {
   constructor(data, options) {
     super(data, options);
@@ -327,17 +520,16 @@ class BoundedHeightfield extends CANNON.Heightfield {
     this.cacheLimit = 8192;
   }
   getCachedConvexTrianglePillar(x, y, upper) {
-    const key = this.getCacheConvexTrianglePillarKey(x, y, upper),
+    const key = (x * this.data[0].length + y) * 2 + Number(upper),
       value = this.pillarCache?.get(key);
-    if (value) {
-      this.pillarCache.delete(key);
-      this.pillarCache.set(key, value);
-    }
     return value;
+  }
+  clearCachedConvexTrianglePillar(x, y, upper) {
+    this.pillarCache?.delete((x * this.data[0].length + y) * 2 + Number(upper));
   }
   setCachedConvexTrianglePillar(x, y, upper, convex, offset) {
     if (!this.pillarCache) return;
-    const key = this.getCacheConvexTrianglePillarKey(x, y, upper);
+    const key = (x * this.data[0].length + y) * 2 + Number(upper);
     this.pillarCache.set(key, { convex, offset });
     if (this.pillarCache.size > this.cacheLimit)
       this.pillarCache.delete(this.pillarCache.keys().next().value);
@@ -375,6 +567,8 @@ export class CitySimulation {
     this.wetness = 0;
     this.elapsed = 0;
     this.accumulator = 0;
+    this.maxSubSteps = clamp(options.maxSubSteps ?? 2, 1, 6);
+    this.stepStats = { substeps: 0, droppedSeconds: 0 };
     this.gear = 1;
     this.rpm = 850;
     this.onRoad = true;
@@ -384,8 +578,10 @@ export class CitySimulation {
       gravity: new CANNON.Vec3(0, -9.81, 0),
       allowSleep: true,
     });
-    this.world.broadphase = new CANNON.SAPBroadphase(this.world);
+    this.world.broadphase = new CityBroadphase(this.world);
+
     this.world.solver.iterations = 8;
+    this.world.narrowphase = new CityNarrowphase(this.world);
     this.world.defaultContactMaterial.friction = 0.28;
     this.world.defaultContactMaterial.restitution = 0.1;
     this.segments = roadSegments(city);
@@ -608,31 +804,24 @@ export class CitySimulation {
         minY: Math.min(...footprint.map((p) => p.y)),
         maxY: Math.max(...footprint.map((p) => p.y)),
       });
-      // Triangle prisms exactly decompose a concave footprint and courtyard holes.
-      // A hull would silently fill alleys/open courtyards and create ghost walls.
-      for (let i = 0; i < triangles.length; i += 3) {
-        let tri = triangles.slice(i, i + 3).map((j) => vertices2[j]);
-        const area =
-          (tri[1].x - tri[0].x) * (tri[2].y - tri[0].y) -
-          (tri[1].y - tri[0].y) * (tri[2].x - tri[0].x);
-        if (Math.abs(area) < 0.025) continue;
-        if (area < 0) tri.reverse();
-        const cx = tri.reduce((v, p) => v + p.x, 0) / 3,
-          cy = tri.reduce((v, p) => v + p.y, 0) / 3;
+      // Convex pieces retain the exact earcut footprint and holes.
+      for (const polygon of convexBuildingParts(triangles, vertices2)) {
+        const count = polygon.length;
+        const cx = polygon.reduce((v, p) => v + p.x, 0) / count,
+          cy = polygon.reduce((v, p) => v + p.y, 0) / count;
         const vertices = [];
         for (const h of [-height / 2, height / 2])
-          for (const p of tri)
+          for (const p of polygon)
             vertices.push(new CANNON.Vec3(p.x - cx, h, -(p.y - cy)));
-        const shape = new CANNON.ConvexPolyhedron({
-          vertices,
-          faces: [
-            [2, 1, 0],
-            [3, 4, 5],
-            [0, 1, 4, 3],
-            [1, 2, 5, 4],
-            [2, 0, 3, 5],
-          ],
-        });
+        const faces = [
+          Array.from({ length: count }, (_, i) => count - 1 - i),
+          Array.from({ length: count }, (_, i) => i + count),
+        ];
+        for (let i = 0; i < count; i++) {
+          const next = (i + 1) % count;
+          faces.push([i, next, next + count, i + count]);
+        }
+        const shape = new CANNON.ConvexPolyhedron({ vertices, faces });
         shape.buildingId = building.id;
         this.#static(
           shape,
@@ -1034,6 +1223,7 @@ export class CitySimulation {
         VEHICLE_PROFILES[(added + 2) % VEHICLE_PROFILES.length],
       );
       record.parked = true;
+      record.body.allowSleep = true;
       record.controls.brake = 1;
       this.traffic.push(record);
       added++;
@@ -1081,11 +1271,14 @@ export class CitySimulation {
     this.vehicle = record;
     previous.traffic = true;
     previous.parked = true;
+    previous.body.allowSleep = true;
     previous.abandoned = true;
     previous.chaseTarget = null;
     previous.controls = { throttle: 0, steer: 0, brake: 0.9, handbrake: false };
     record.traffic = false;
     record.parked = false;
+    record.body.allowSleep = false;
+    record.body.wakeUp();
     record.abandoned = false;
     record.chaseTarget = null;
     record.controls = { throttle: 0, steer: 0, brake: 0, handbrake: false };
@@ -1108,6 +1301,8 @@ export class CitySimulation {
     return { ok: true, vehicle: record, previous };
   }
   #drive(record, controls, dt) {
+    if (record.body.sleepState === CANNON.Body.SLEEPING && record.parked)
+      return;
     const body = record.body,
       forward = body.vectorToWorldFrame(FORWARD);
     const longitudinal = body.velocity.dot(forward),
@@ -1164,6 +1359,11 @@ export class CitySimulation {
     );
     record.raycast.setSteeringValue(record.steeringAngle, 0);
     record.raycast.setSteeringValue(record.steeringAngle, 1);
+    const localVelocity = body.vectorToLocalFrame(body.velocity);
+    const slipAngle = Math.abs(
+      Math.atan2(localVelocity.x, Math.max(2, Math.abs(localVelocity.z))),
+    );
+    const slipGrip = lerp(1, 0.79, clamp((slipAngle - 0.12) / 0.48, 0, 1));
     for (let i = 0; i < 4; i++) {
       const w = record.wheels[i];
       const baseSurface =
@@ -1181,11 +1381,7 @@ export class CitySimulation {
         record.profile.gripMultiplier *
         (record.tuning.grip || 1);
       // Progressive lateral grip falloff approximates a street tyre beyond peak slip.
-      const localVelocity = body.vectorToLocalFrame(body.velocity);
-      const slipAngle = Math.abs(
-        Math.atan2(localVelocity.x, Math.max(2, Math.abs(localVelocity.z))),
-      );
-      grip *= lerp(1, 0.79, clamp((slipAngle - 0.12) / 0.48, 0, 1));
+      grip *= slipGrip;
       if (controls.handbrake && i > 1) grip *= 0.6;
       w.frictionSlip = grip;
       // Rear-wheel drive; longitudinal force is bounded per-wheel after suspension loads.
@@ -1245,7 +1441,8 @@ export class CitySimulation {
   step(dt) {
     this.accumulator += clamp(Number.isFinite(dt) ? dt : 0, 0, 0.1);
     let steps = 0;
-    while (this.accumulator >= FIXED_STEP && steps++ < 6) {
+    while (this.accumulator + 1e-10 >= FIXED_STEP && steps < this.maxSubSteps) {
+      steps++;
       this.elapsed += FIXED_STEP;
       this.pursuit?.update(FIXED_STEP);
       if (this.pursuit?.state === "busted")
@@ -1270,7 +1467,18 @@ export class CitySimulation {
       this.world.step(FIXED_STEP);
       this.accumulator -= FIXED_STEP;
     }
-    for (const car of [this.vehicle, ...this.traffic])
+    // Keep one pending tick plus its fraction so 30 fps jitter can recover from
+    // a frame just below two ticks. Solve work stays capped; older whole-step
+    // debt is dropped under sustained overload, and carry stays below two ticks.
+    if (this.accumulator + 1e-10 >= FIXED_STEP * 2) {
+      const dropped =
+        (Math.floor((this.accumulator + 1e-10) / FIXED_STEP) - 1) * FIXED_STEP;
+      this.stepStats.droppedSeconds += dropped;
+      this.accumulator -= dropped;
+    }
+    this.accumulator = Math.max(0, this.accumulator);
+    this.stepStats.substeps = steps;
+    for (const car of this.allVehicles)
       for (let i = 0; i < 4; i++) car.raycast.updateWheelTransform(i);
     const car = this.vehicle;
     this.gear =

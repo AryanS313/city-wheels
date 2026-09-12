@@ -144,8 +144,19 @@ export function prepareCarAsset(scene) {
       geometry.setAttribute("uv1", geometry.attributes.uv.clone());
     const key = `${category}|${source.uuid}|${deform ? 1 : 0}`;
     if (!buckets.has(key))
-      buckets.set(key, { category, source, deform, geometries: [], names: [] });
+      buckets.set(key, {
+        category,
+        source,
+        deform,
+        geometries: [],
+        trafficGeometries: [],
+        names: [],
+      });
     buckets.get(key).geometries.push(geometry);
+    // Keep exterior primitives separate before material merging. Otherwise a
+    // gasket sharing black plastic with the seats retains the whole interior.
+    if (wheelIndex >= 0 || /^Body/.test(node.name))
+      buckets.get(key).trafficGeometries.push(geometry);
     buckets.get(key).names.push(node.name);
     if (node.name === "BodyWindshield") glass.push(geometry.clone());
   });
@@ -159,7 +170,16 @@ export function prepareCarAsset(scene) {
       throw new Error(`Cannot merge car material ${bucket.source.name}`);
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
-    groups.push({ ...bucket, geometry, geometries: undefined });
+    const exteriorGeometry = bucket.trafficGeometries.length
+      ? mergeGeometries(bucket.trafficGeometries, false)
+      : null;
+    groups.push({
+      ...bucket,
+      geometry,
+      exteriorGeometry,
+      geometries: undefined,
+      trafficGeometries: undefined,
+    });
   }
   const windshield = glass.length ? mergeGeometries(glass, false) : null;
   template = {
@@ -256,14 +276,13 @@ let scratchesTexture, cracksTexture;
 
 // Preserve the real body silhouette in distant traffic with a shared vertex
 // clustering LOD. Near cars and the player's interior always use source detail.
-function trafficGeometry(source) {
+function trafficGeometry(source, step = 0.055) {
   const p = source.attributes.position,
     bins = new Map(),
     remap = new Uint32Array(p.count),
     vertices = [],
     uvs = [];
-  const uv = source.attributes.uv,
-    step = 0.055;
+  const uv = source.attributes.uv;
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i),
       y = p.getY(i),
@@ -307,6 +326,150 @@ function trafficGeometry(source) {
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+// NPCs retain the actual exterior GLB silhouette, reduced once at load time.
+// Group by visual purpose instead of every source material: one paint batch,
+// one colored trim batch, one glass batch, and one batch per articulated wheel.
+function prepareTrafficBatches() {
+  if (template.trafficBatches) return template.trafficBatches;
+  const levels = {};
+  for (const level of ["medium", "low"]) {
+    const buckets = new Map();
+    for (const item of template.groups) {
+      if (!item.exteriorGeometry) continue;
+      const wheel = item.category.startsWith("wheel");
+      const name = item.source.name;
+      const kind = wheel
+        ? item.category
+        : /^Paint/.test(name)
+          ? "paint"
+          : /Glass/.test(name)
+            ? "glass"
+            : level === "medium" && /Headlight/.test(name)
+              ? "head"
+              : level === "medium" && /Brakelight/.test(name)
+                ? "brake"
+                : "trim";
+      const geometry = trafficGeometry(
+        item.exteriorGeometry,
+        level === "low" ? 0.13 : 0.065,
+      );
+      if (!geometry.index.count) {
+        geometry.dispose();
+        continue;
+      }
+      const color = item.source.color?.clone() ?? new THREE.Color("#888888");
+      if (/Tire/.test(name)) color.set("#15181a");
+      if (/Brakelight/.test(name)) color.set("#ad1730");
+      if (/Headlight/.test(name)) color.set("#e1e9ed");
+      if (/Signallight/.test(name)) color.set("#c58924");
+      const colors = new Float32Array(geometry.attributes.position.count * 3);
+      for (let i = 0; i < colors.length; i += 3) {
+        colors[i] = color.r;
+        colors[i + 1] = color.g;
+        colors[i + 2] = color.b;
+      }
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      if (!buckets.has(kind)) buckets.set(kind, []);
+      buckets.get(kind).push(geometry);
+    }
+    levels[level] = new Map();
+    for (const [kind, geometries] of buckets) {
+      const merged = mergeGeometries(geometries, false);
+      merged.computeBoundingBox();
+      merged.computeBoundingSphere();
+      levels[level].set(kind, merged);
+      for (const geometry of geometries) geometry.dispose();
+    }
+  }
+  return (template.trafficBatches = levels);
+}
+
+function createTrafficVisuals(visual, color) {
+  const levels = prepareTrafficBatches();
+  const paint = new THREE.MeshStandardMaterial({
+    color,
+    metalness: 0.6,
+    roughness: 0.34,
+  });
+  const trim = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    metalness: 0.32,
+    roughness: 0.58,
+  });
+  const glass = new THREE.MeshStandardMaterial({
+    color: "#415863",
+    metalness: 0.62,
+    roughness: 0.19,
+  });
+  const head = new THREE.MeshStandardMaterial({
+    color: "#dce9ef",
+    emissive: "#b6c8d5",
+    emissiveIntensity: 0.3,
+  });
+  const brake = new THREE.MeshStandardMaterial({
+    color: "#882131",
+    emissive: "#d31430",
+    emissiveIntensity: 0.35,
+  });
+  visual.trafficMaterials = [paint, trim, glass, head, brake];
+  visual.paintMaterials.push(paint);
+  visual.headMaterials.push(head);
+  visual.brakeMaterials.push(brake);
+  visual.trafficEntries = [];
+  visual.trafficDeformMeshes = [];
+  const level = visual.detail === "low" ? "low" : "medium";
+  for (const [kind] of levels.medium) {
+    const geometry = levels[level].get(kind) ?? levels.medium.get(kind);
+    const material =
+      kind === "paint"
+        ? paint
+        : kind === "glass"
+          ? glass
+          : kind === "head"
+            ? head
+            : kind === "brake"
+              ? brake
+              : trim;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = `Traffic / ${kind}`;
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.visible = !visual.player && levels[level].has(kind);
+    if (kind.startsWith("wheel"))
+      visual.wheels[Number(kind.slice(5))].add(mesh);
+    else visual.root.add(mesh);
+    const entry = { kind, mesh };
+    if (!kind.startsWith("wheel") && kind !== "glass") {
+      entry.deformation = {
+        mesh,
+        original: geometry.attributes.position.array,
+        unique: false,
+        damageKey: null,
+      };
+      visual.trafficDeformMeshes.push(entry.deformation);
+    }
+    visual.trafficEntries.push(entry);
+  }
+  visual.trafficLevel = level;
+}
+
+/** Optional renderer shadow budget: at most one paint batch per NPC. */
+export function setCarVisualShadows(visual, enabled = visual.player) {
+  visual.shadowsEnabled = !!enabled;
+  for (const entry of visual.entries) {
+    // Internal cockpit and 24 wheel submeshes do not need independent shadows.
+    entry.mesh.castShadow =
+      !!enabled &&
+      visual.player &&
+      !entry.item.category.startsWith("wheel") &&
+      /^Paint/.test(entry.item.source.name);
+    entry.mesh.receiveShadow = visual.player;
+  }
+  for (const entry of visual.trafficEntries)
+    entry.mesh.castShadow =
+      !!enabled && !visual.player && entry.kind === "paint";
 }
 
 // Every template buffer stays immutable and shared. A visual owns only its
@@ -390,11 +553,7 @@ export function createCarVisual(
   const brakeMaterials = [],
     headMaterials = [],
     entries = [];
-  const detail = player
-    ? "full"
-    : options.detail === "medium"
-      ? "medium"
-      : "full";
+  const detail = player ? "full" : options.detail === "low" ? "low" : "medium";
   for (const item of template.groups) {
     let material = materials.get(item.source.uuid);
     if (!material) {
@@ -424,7 +583,7 @@ export function createCarVisual(
       if (/Brakelight/.test(material.name)) brakeMaterials.push(material);
       if (/Headlight/.test(material.name)) headMaterials.push(material);
     }
-    const geometry = geometryFor(item, detail),
+    const geometry = geometryFor(item, "full"),
       mesh = new THREE.Mesh(geometry, material);
     mesh.name = item.names.join("+");
     mesh.castShadow = true;
@@ -441,7 +600,7 @@ export function createCarVisual(
         /^Interior|^Engine$|^Axles$/.test(name),
       ),
     };
-    mesh.visible = player || !entry.interior;
+    mesh.visible = player;
     if (item.deform) {
       entry.deformation = {
         mesh,
@@ -506,6 +665,8 @@ export function createCarVisual(
     entries,
     disposed: false,
   };
+  createTrafficVisuals(visual, color);
+  setCarVisualShadows(visual, options.castShadow ?? player);
   visual.dispose = () => {
     if (visual.disposed) return;
     visual.disposed = true;
@@ -513,6 +674,9 @@ export function createCarVisual(
     root.removeFromParent();
     wheels.forEach((w) => w.removeFromParent());
     for (const m of materials.values()) m.dispose();
+    for (const m of visual.trafficMaterials) m.dispose();
+    for (const d of visual.trafficDeformMeshes)
+      if (d.unique) d.mesh.geometry.dispose();
     windshieldMesh?.material.dispose();
     for (const d of deformMeshes) if (d.unique) d.mesh.geometry.dispose();
     for (const d of visual.decals) {
@@ -525,51 +689,41 @@ export function createCarVisual(
   return visual;
 }
 
-/** Switch ownership/LOD without replacing scene nodes, textures or materials. */
+/** Switch ownership/LOD without replacing nodes, materials, or source buffers. */
 export function setCarVisualState(
   visual,
   { player = visual.player, detail = visual.detail } = {},
 ) {
   if (visual.disposed) return false;
   player = !!player;
-  detail = player ? "full" : detail === "medium" ? "medium" : "full";
+  detail = player ? "full" : detail === "low" ? "low" : "medium";
   const roleChanged = visual.player !== player,
     detailChanged = visual.detail !== detail;
   if (!roleChanged && !detailChanged) return false;
   visual.player = player;
   visual.detail = detail;
-  for (const entry of visual.entries) {
-    entry.mesh.visible = player || !entry.interior;
-    if (!detailChanged) continue;
-    const geometry = geometryFor(entry.item, detail);
+  for (const entry of visual.entries) entry.mesh.visible = player;
+  const level = detail === "low" ? "low" : "medium";
+  for (const entry of visual.trafficEntries) {
+    const geometry = template.trafficBatches[level].get(entry.kind);
+    entry.mesh.visible = !player && !!geometry;
+    if (level === visual.trafficLevel || !geometry) continue;
     if (entry.deformation) {
       if (entry.deformation.unique) entry.mesh.geometry.dispose();
       entry.deformation.unique = false;
+      entry.deformation.damageKey = null;
       entry.deformation.original = geometry.attributes.position.array;
     }
     entry.mesh.geometry = geometry;
   }
+  visual.trafficLevel = level;
+  setCarVisualShadows(visual, player);
   if (!player)
     for (const light of visual.lamps) {
       light.visible = false;
       light.intensity = 0;
     }
-  if (detailChanged) {
-    applyCarDamage(visual, visual.damage, { force: true });
-  } else {
-    // A role change keeps existing dents and scratch meshes intact. Generate
-    // scratches only the first time an already-damaged NPC becomes the player.
-    if (visual.windshieldMesh)
-      visual.windshieldMesh.visible =
-        player && visual.windshieldMesh.material.opacity > 0;
-    for (const decal of visual.decals) decal.visible = player;
-    if (
-      player &&
-      visual.decals.length === 0 &&
-      Object.values(visual.damage).some((value) => value > 0.035)
-    )
-      applyCarDamage(visual, visual.damage, { force: true, deform: false });
-  }
+  applyCarDamage(visual, visual.damage, { force: true });
   return true;
 }
 
@@ -592,8 +746,13 @@ export function applyCarDamage(
     return;
   visual.damage = zones;
   const hasDamage = Object.values(zones).some((value) => value > 0);
+  const damageKey = Object.values(zones).join(",");
   if (deform)
-    for (const item of visual.deformMeshes) {
+    for (const item of visual.player
+      ? visual.deformMeshes
+      : visual.trafficDeformMeshes) {
+      if (item.damageKey === damageKey) continue;
+      item.damageKey = damageKey;
       if (!hasDamage && !item.unique) continue;
       const { mesh, original } = item;
       if (!item.unique) {
@@ -629,14 +788,21 @@ export function applyCarDamage(
     visual.windshieldMesh.visible =
       visual.player && visual.windshieldMesh.material.opacity > 0;
   }
-  // Small projected scratches follow the real deformed panel surface, rather than floating planes.
+  // A role change reuses existing scratches; only changed damage projects them again.
+  if (visual.decalsDamageKey === damageKey) {
+    for (const decal of visual.decals) decal.visible = visual.player;
+    return;
+  }
+  // Small projected scratches follow the real deformed panel surface.
   for (const old of visual.decals) {
     old.removeFromParent();
     old.geometry.dispose();
     old.material.dispose();
   }
   visual.decals = [];
+  visual.decalsDamageKey = null;
   if (!visual.player || !hasDamage) return;
+  visual.decalsDamageKey = damageKey;
   scratchesTexture ??= lineTexture(false);
   visual.root.updateMatrixWorld(true);
   const inv = visual.root.matrixWorld.clone().invert();

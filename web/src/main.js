@@ -348,7 +348,7 @@ function updateBeacon() {
 }
 function updateGameplayUI() {
   const wanted = session.wanted;
-  document.body.classList.toggle("wanted", wanted);
+  document.body.classList.toggle("is-wanted", wanted);
   $("wanted").hidden = !wanted || session.busted;
   const search = pursuit.state === "search";
   $("wanted").classList.toggle("search", search);
@@ -413,7 +413,7 @@ function restartDrive() {
   paused = false;
   photo = false;
   view.setPhoto(false);
-  document.body.classList.remove("busted", "paused", "wanted", "photo");
+  document.body.classList.remove("busted", "paused", "is-wanted", "photo");
   $("busted").hidden = true;
   $("photo-ui").hidden = true;
   $("mission-title").textContent = "Find your way through the hills.";
@@ -494,6 +494,10 @@ $("world").addEventListener("webglcontextrestored", () => {
   }
 });
 function updateFrame(now) {
+  view?.observeFrame(
+    (now - lastTime) / 1000,
+    playing && !paused && !photo && !session?.busted,
+  );
   const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   if (!sim || !view) return;
@@ -649,6 +653,11 @@ $("info").addEventListener("click", (e) => {
   if (e.target === $("info")) $("info").close();
 });
 $("sound").addEventListener("click", () => setupAudio());
+$("graphics").addEventListener("change", (event) => {
+  if (!view) return;
+  view.setGraphics(event.target.value);
+  toast(`Graphics: ${event.target.selectedOptions[0].textContent}`);
+});
 $("job").addEventListener("click", beginJob);
 document
   .querySelectorAll("[data-weather]")

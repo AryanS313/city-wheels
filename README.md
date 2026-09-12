@@ -4,11 +4,11 @@
 
 Drive a real **1 km × 1 km** slice of Russian Hill, San Francisco, including crooked Lombard Street and steep Filbert Street. This repository contains a UE5 C++ starter, a reproducible OpenStreetMap/USGS import pipeline, and a public playable browser companion.
 
-**Status (v0.3.1):** the browser prototype has a detailed licensed car, 40 moving vehicles (including four police patrols), 16 parked cars, 150 residents, business scenery, police pursuit and car theft. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
+**Status (v0.3.2):** the browser prototype has a detailed licensed car, 40 moving vehicles (including four police patrols), 16 parked cars, 150 residents, business scenery, police pursuit and car theft. The Unreal source is not yet compiled or packaged: the authoring machine has no Unreal Engine or full Xcode installation. This is the first district prototype, not the complete photorealistic game. The browser edition uses Three.js and cannon-es; it does not use Unreal, Lumen or Nanite.
 
 ## Stability update
 
-v0.3.1 retains vehicle visuals and damage during theft, resets the camera cleanly, bounds terrain physics memory and reduces crowd buffer uploads. Traffic spawns avoid buildings and the finite district has visible solid edge barriers. A lost graphics context pauses the drive and attempts to restore the display; a failed frame offers a restart. See [validation](docs/validation.md) for the tests and limits.
+v0.3.2 fixes the police-alert CSS collision that shrank the entire canvas when stealing a car or injuring a pedestrian. Alerts now stay readable and separate from the page layout. Traffic uses lighter visible meshes, rendering has Auto/Performance/Balanced/High graphics settings, and collision checks avoid unrelated terrain cells and redundant building faces. The city still contains 57 physical vehicles and 150 residents. See [validation](docs/validation.md) for reproduction and tests.
 
 ## Play
 
@@ -20,7 +20,7 @@ Open **https://aryans313.github.io/city-wheels/** on a desktop browser and selec
 - **C:** chase, cockpit and cinematic cameras. **H:** horn. Engine, skid and impact audio starts when you play; toggle sound in the top bar.
 - **P:** photo mode; drag to orbit, scroll to zoom, save a screenshot.
 - **Esc:** pause/resume. Press a driving key or click the scene to resume after switching tabs.
-- Use the weather controls for daylight, bay fog, rain and night.
+- Use the weather controls for daylight, bay fog, rain and night. **Graphics → Performance** lowers rendering cost; **Auto** adapts when frames remain slow.
 - Select **Start a delivery**, follow the amber marker on the minimap, and stop nearby.
 
 The browser car uses a 1,450 kg rigid body, four suspension contacts, engine torque/gearing and surface-dependent grip. The detailed CC BY 4.0 CarConcept body includes an interior, separate wheels and PBR materials. Impacts transfer momentum, deform local panels, add scratches and crack the windshield. Major front damage reduces power; small scrapes preserve driveability. Recovery repairs the car.

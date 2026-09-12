@@ -10,9 +10,12 @@ export function installStabilityPanel({
 }) {
   const panel = document.createElement("aside");
   panel.style.cssText =
-    "position:fixed;z-index:90;left:20px;top:90px;padding:12px;background:#102632ed;color:white;width:390px;font:12px monospace";
-  panel.innerHTML = `<strong>Development stability checks</strong><p><button id="test-switch">Run 60 car switches</button> <button id="test-context">Test display recovery</button> <button id="test-frame">Test stopped-frame recovery</button></p><pre id="test-result" style="white-space:pre-wrap">Ready</pre>`;
+    "position:fixed;z-index:90;left:20px;top:90px;padding:12px;background:#102632ed;color:white;width:390px;max-height:calc(100vh - 120px);overflow:auto;font:12px monospace";
+  panel.innerHTML = `<strong>Development stability checks</strong><p><button id="test-theft-once">Trigger one theft</button> <button id="test-person">Trigger pedestrian injury</button> <button id="test-clear">Clear wanted</button> <button id="test-benchmark">Measure 180 frames</button> <button id="test-switch">Run 60 car switches</button> <button id="test-context">Test display recovery</button> <button id="test-frame">Test stopped-frame recovery</button></p><pre id="test-result" style="white-space:pre-wrap">Ready</pre>`;
   document.body.append(panel);
+  const layoutButton = document.createElement("button");
+  layoutButton.textContent = "Check responsive layout";
+  panel.querySelector("p").append(layoutButton);
   const result = panel.querySelector("#test-result");
   let errors = 0,
     contextLosses = 0;
@@ -30,7 +33,113 @@ export function installStabilityPanel({
     ...view.renderer.info.memory,
     programs: view.renderer.info.programs.length,
     draws: view.renderer.info.render.calls,
+    triangles: view.renderer.info.render.triangles,
   });
+  const bounds = () => {
+    const r = view.renderer.domElement.getBoundingClientRect();
+    return {
+      x: r.x,
+      y: r.y,
+      width: r.width,
+      height: r.height,
+      viewport: [innerWidth, innerHeight],
+    };
+  };
+  const assertViewport = () => {
+    const r = bounds();
+    assert(
+      Math.abs(r.x) < 1 &&
+        Math.abs(r.y) < 1 &&
+        Math.abs(r.width - innerWidth) < 1 &&
+        Math.abs(r.height - innerHeight) < 1,
+      `Game view collapsed: ${JSON.stringify(r)}`,
+    );
+    const hud = document.querySelector("#wanted"),
+      h = hud.getBoundingClientRect();
+    if (!hud.hidden)
+      assert(
+        h.x >= 0 &&
+          h.y >= 0 &&
+          h.right <= innerWidth + 1 &&
+          h.bottom <= innerHeight + 1,
+        "Police alert is outside viewport",
+      );
+  };
+  layoutButton.onclick = async () => {
+    const { runWantedLayoutRegression } = await import(
+      "./wanted-layout-browser.js"
+    );
+    const report = await runWantedLayoutRegression();
+    result.textContent = JSON.stringify(report, null, 2);
+  };
+  const reportBounds = async () => {
+    await frame();
+    await frame();
+    try {
+      assertViewport();
+      result.textContent = JSON.stringify(
+        {
+          status: "PASS",
+          wanted: session.wanted,
+          canvas: bounds(),
+          gpu: info(),
+        },
+        null,
+        2,
+      );
+    } catch (error) {
+      result.textContent = `FAIL: ${error.message}`;
+    }
+  };
+  panel.querySelector("#test-theft-once").onclick = async () => {
+    pause();
+    const target = sim.traffic.find((c) => c.parked) || sim.traffic[0];
+    target.body.position.copy(sim.vehicle.body.position);
+    target.body.position.x += 3.8;
+    target.body.velocity.setZero();
+    sim.vehicle.body.velocity.setZero();
+    for (let w = 0; w < 4; w++) target.raycast.updateWheelTransform(w);
+    session.theftTarget = target;
+    assert(session.completeTheft(), "Theft failed");
+    await reportBounds();
+  };
+  panel.querySelector("#test-person").onclick = async () => {
+    pause();
+    const person = life.people.find((p) => p.outcome === "healthy");
+    life.handleVehicleImpact(person, sim.vehicle.body, 8, 10);
+    session.update(1 / 60);
+    await reportBounds();
+  };
+  panel.querySelector("#test-clear").onclick = async () => {
+    pursuit.reset();
+    session.update(0);
+    await reportBounds();
+  };
+  panel.querySelector("#test-benchmark").onclick = async () => {
+    pause();
+    const times = [];
+    let last = performance.now();
+    for (let i = 0; i < 210; i++) {
+      await frame();
+      const now = performance.now();
+      if (i >= 30) times.push(now - last);
+      last = now;
+      if (i % 30 === 0)
+        result.textContent = `Measuring ${Math.max(0, i - 30)}/180 frames`;
+    }
+    times.sort((a, b) => a - b);
+    result.textContent = JSON.stringify(
+      {
+        frames: times.length,
+        medianMs: times[90],
+        p95Ms: times[171],
+        gpu: info(),
+        canvas: bounds(),
+      },
+      null,
+      2,
+    );
+  };
   panel.querySelector("#test-frame").onclick = () => {
     pause();
     sim.vehicle.body.position.x = NaN;
@@ -142,6 +251,7 @@ export function installStabilityPanel({
           2,
         );
         await frame();
+        assertViewport();
       }
       const end = info();
       assert(

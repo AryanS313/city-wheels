@@ -3,11 +3,13 @@ import {
   loadCarAsset,
   createCarVisual,
   setCarVisualState,
+  setCarVisualShadows,
   updateCarVisual,
 } from "./car-visual.js";
 import { addVehicleDetails, updateVehicleDetails } from "./vehicle-details.js";
 import { Sky } from "three/addons/objects/Sky.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { GraphicsBudget, applyPointLightBudget } from "./graphics-budget.js";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const V = (p) => new THREE.Vector3(p[0], p[2], -p[1]);
@@ -114,6 +116,7 @@ export class CityRenderer {
     this.groundAt =
       options.sampleElevation || ((x, n) => terrainHeight(city, x, n));
     this.city = city;
+    this.graphics = new GraphicsBudget();
     this.scene = new THREE.Scene();
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -121,8 +124,12 @@ export class CityRenderer {
       preserveDrawingBuffer: false,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.7));
+    this.renderer.setPixelRatio(
+      this.graphics.pixelRatio(innerWidth, innerHeight, devicePixelRatio),
+    );
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.nextShadowAt = 0;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1;
@@ -139,7 +146,10 @@ export class CityRenderer {
     this.previousCarPosition = new THREE.Vector3();
     this.sun = new THREE.DirectionalLight("#ffe1af", 3.2);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.set(
+      this.graphics.settings.shadowSize,
+      this.graphics.settings.shadowSize,
+    );
     Object.assign(this.sun.shadow.camera, {
       left: -100,
       right: 100,
@@ -169,9 +179,30 @@ export class CityRenderer {
   resize() {
     const w = innerWidth,
       h = innerHeight;
+    this.renderer.setPixelRatio(
+      this.graphics.pixelRatio(w, h, devicePixelRatio),
+    );
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+  }
+  setGraphics(mode) {
+    this.graphics.setMode(mode);
+    this.applyGraphics();
+  }
+  observeFrame(seconds, active) {
+    if (this.graphics.sample(seconds, active)) this.applyGraphics();
+  }
+  applyGraphics() {
+    const size = this.graphics.settings.shadowSize;
+    if (this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+      this.sun.shadow.mapSize.set(size, size);
+    }
+    this.nextShadowAt = 0;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.resize();
   }
   createWorld() {
     const city = this.city,
@@ -534,6 +565,7 @@ export class CityRenderer {
     this.nearLights = [];
     for (let i = 0; i < 5; i++) {
       const light = new THREE.PointLight("#ffd39c", 0, 19, 2);
+      light.visible = false;
       this.scene.add(light);
       this.nearLights.push(light);
     }
@@ -572,6 +604,7 @@ export class CityRenderer {
   }
   setWeather(mode) {
     this.weather = mode;
+    this.nextShadowAt = 0;
     const cfg = {
       golden: {
         sun: 3.2,
@@ -661,6 +694,8 @@ export class CityRenderer {
     this.clock += dt;
     const car = sim.vehicle,
       body = car.body;
+    const settings = this.graphics.settings;
+    let policeLightBudget = this.graphics.level === "high" ? 2 : 1;
     if (
       ![
         body.position.x,
@@ -680,18 +715,15 @@ export class CityRenderer {
       let visual = this.carVisuals.get(record);
       const detail = player
         ? "full"
-        : visual?.detail === "full"
-          ? distance > 90
-            ? "medium"
-            : "full"
-          : distance < 65
-            ? "full"
-            : "medium";
+        : distance <
+            settings.nearDistance + (visual?.detail === "medium" ? 10 : 0)
+          ? "medium"
+          : "low";
       // Retain each car's mesh and materials through ownership and LOD changes.
       if (visual && (visual.player !== player || visual.detail !== detail)) {
         setCarVisualState(visual, { player, detail });
       }
-      if (!visual && (player || distance < 300)) {
+      if (!visual && (player || distance < settings.trafficDistance)) {
         visual = this.createCar(
           record.profile?.color ||
             record.color ||
@@ -712,10 +744,14 @@ export class CityRenderer {
         this.carVisuals.set(record, visual);
       }
       if (!visual) continue;
-      const visible = player || distance < 300;
+      const visible = player || distance < settings.trafficDistance;
       visual.root.visible = visible;
       visual.wheels.forEach((wheel) => (wheel.visible = visible));
       if (!visible) continue;
+      setCarVisualShadows(
+        visual,
+        player || distance < (this.graphics.level === "performance" ? 15 : 28),
+      );
       updateCarVisual(visual, record, {
         dt,
         weather: this.weather,
@@ -728,6 +764,8 @@ export class CityRenderer {
         wanted: sim.pursuit?.state !== "idle" && !!sim.pursuit,
         distance,
       });
+      if (visual.policeGlow?.visible)
+        visual.policeGlow.visible = policeLightBudget-- > 0;
     }
     const bp = new THREE.Vector3().copy(body.position),
       q = new THREE.Quaternion().copy(body.quaternion);
@@ -806,15 +844,31 @@ export class CityRenderer {
           : 0,
       bp,
     );
+    const streetLightBudget =
+      this.graphics.level === "high"
+        ? 6
+        : this.graphics.level === "performance"
+          ? 2
+          : 3;
     if (this.weather === "night" || this.weather === "rain") {
       const closest = [...this.lightPosts].sort(
         (a, b) => a.distanceToSquared(bp) - b.distanceToSquared(bp),
       );
       for (let i = 0; i < this.nearLights.length; i++) {
         if (closest[i]) this.nearLights[i].position.copy(closest[i]);
-        this.nearLights[i].intensity = this.weather === "night" ? 18 : 5;
+        this.nearLights[i].intensity = closest[i]
+          ? this.weather === "night"
+            ? 18
+            : 5
+          : 0;
       }
     } else this.nearLights.forEach((l) => (l.intensity = 0));
+    // Both street-light pools share one allowance. Zero-intensity lights must
+    // also be invisible: Three otherwise includes them in lighting shaders.
+    applyPointLightBudget(
+      [this.streetVisuals?.lights, this.nearLights],
+      streetLightBudget,
+    );
     if (this.rain.visible) {
       this.rain.position.copy(bp);
       const p = this.rain.geometry.attributes.position;
@@ -823,6 +877,15 @@ export class CityRenderer {
         p.setX(i, ((p.getX(i) - dt * 3 + 150) % 100) - 50);
       }
       p.needsUpdate = true;
+    }
+    if (
+      this.photo ||
+      switched ||
+      recovered ||
+      this.clock >= this.nextShadowAt
+    ) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.nextShadowAt = this.clock + settings.shadowInterval;
     }
     this.renderer.render(this.scene, this.camera);
   }
